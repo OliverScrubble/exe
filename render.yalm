@@ -6,4 +6,4 @@ services:
     startCommand: python app.py
     envVars:
       - key: MATRIX_TOKEN
-        value: your_actual_matrix_token_here
+        value: mat_PlzYZMyyjtJ6bLhSWhjwFseS0245tZ_0d9P8q
