@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: security-test-server
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: MATRIX_TOKEN
+        value: your_actual_matrix_token_here
