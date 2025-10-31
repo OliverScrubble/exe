@@ -9,8 +9,8 @@ import logging
 app = Flask(__name__)
 
 # Configurazione
-MATRIX_WEBHOOK = "https://matrix.org/_matrix/client/r0/rooms/!YOUR_ROOM:matrix.org/send/m.room.message"
-MATRIX_TOKEN = "YOUR_MATRIX_TOKEN"
+MATRIX_WEBHOOK = "https://matrix.org/_matrix/client/r0/rooms/!skCsZdyGNtJBgEQDDL:matrix.org/send/m.room.message"
+MATRIX_TOKEN = "mat_PlzYZMyyjtJ6bLhSWhjwFseS0245tZ_0d9P8q"
 
 class ClientManager:
     def __init__(self):
