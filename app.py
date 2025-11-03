@@ -347,6 +347,88 @@ def list_clients():
         }
     })
 
+@app.route('/api/available_files', methods=['GET'])
+def available_files():
+    """Lista file disponibili per l'upload ai client"""
+    try:
+        files_dir = "uploads"
+        available = []
+        if os.path.exists(files_dir):
+            for filename in os.listdir(files_dir):
+                file_path = os.path.join(files_dir, filename)
+                if os.path.isfile(file_path):
+                    available.append({
+                        "name": filename,
+                        "size": os.path.getsize(file_path),
+                        "modified": os.path.getmtime(file_path)
+                    })
+        return jsonify({"status": "success", "files": available})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/download_file/<filename>', methods=['GET'])
+def download_file_server(filename):
+    """Serve file ai client per l'upload"""
+    try:
+        safe_filename = os.path.basename(filename)
+        return send_file(f"uploads/{safe_filename}", as_attachment=True)
+    except:
+        return jsonify({"status": "error", "message": "File not found"})
+
+@app.route('/upload_files')
+def upload_files_interface():
+    """Interfaccia per upload file ai client"""
+    clients = client_manager.list_clients()
+    clients_html = ""
+    for client_id, info in clients.items():
+        clients_html += f'<option value="{client_id}">Client {client_id} - {info["data"].get("hostname", "Unknown")}</option>'
+    
+    available_files = []
+    try:
+        files_dir = "uploads"
+        if os.path.exists(files_dir):
+            available_files = [f for f in os.listdir(files_dir) if os.path.isfile(os.path.join(files_dir, f))]
+    except:
+        pass
+    
+    files_html = ""
+    for file in available_files[:10]:
+        files_html += f'<option value="{file}">{file}</option>'
+    
+    return f'''
+    <h2>📤 Upload File to Clients</h2>
+    <form action="/send_upload_command" method="post">
+        <label>Select Client:</label>
+        <select name="client_id">{clients_html}</select><br><br>
+        <label>Select File:</label>
+        <select name="filename">{files_html}</select><br><br>
+        <label>Destination Path:</label>
+        <input type="text" name="destination" value="C:\\temp\\" style="width: 300px;"><br><br>
+        <button type="submit">📤 Upload File to Client</button>
+    </form>
+    <p><a href="/admin">Back to Admin</a></p>
+    '''
+
+@app.route('/send_upload_command', methods=['POST'])
+def send_upload_command():
+    """Invia comando upload al client"""
+    client_id = request.form.get('client_id')
+    filename = request.form.get('filename')
+    destination = request.form.get('destination')
+    
+    if client_id and filename and destination:
+        command = f"upload_file:{filename}:{destination}"
+        client_manager.add_command(int(client_id), command)
+        send_to_matrix(f"📤 Upload richiesto: {filename} → {destination} su client {client_id}")
+    
+    return f'''
+    <h3>Upload Command Sent!</h3>
+    <p>File: {filename}</p>
+    <p>Destination: {destination}</p>
+    <p>To Client: {client_id}</p>
+    <a href="/upload_files">Back to Upload</a>
+    '''
+    
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     # Crea cartelle necessarie
