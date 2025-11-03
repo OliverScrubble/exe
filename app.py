@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 # Configurazione
 MATRIX_WEBHOOK = "https://matrix.org/_matrix/client/r0/rooms/!skCsZdyGNtJBgEQDDL:matrix.org/send/m.room.message"
-MATRIX_TOKEN = "mat_ODGV8OXrsTxufmSAhqgaMNGdyxAejW_eFbnI3"
+MATRIX_TOKEN = "mat_PBtLmBg36QnnRHbgIxNeG4EPWSIojv_j6MFr2"
 
 class ClientManager:
     def __init__(self):
