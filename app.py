@@ -345,6 +345,41 @@ def available_files():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
+@app.route('/api/user_event', methods=['POST'])
+def user_event():
+    """Riceve eventi login/logout utenti"""
+    try:
+        data = request.json
+        event_type = data.get('event_type', 'unknown')
+        username = data.get('username', 'unknown')
+        session_id = data.get('session_id', '')
+        hostname = data.get('hostname', '')
+        
+        message = f"👤 {event_type.upper()}: {username}"
+        if hostname:
+            message += f" su {hostname}"
+        if session_id:
+            message += f" (sessione: {session_id})"
+        
+        send_to_discord(message)
+        
+        # Salva in log file
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'event': event_type,
+            'username': username,
+            'session_id': session_id,
+            'hostname': hostname
+        }
+        
+        with open('user_sessions.log', 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
+        
+        return jsonify({"status": "success"})
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
 @app.route('/api/download_file/<filename>', methods=['GET'])
 def download_file_server(filename):
     try:
