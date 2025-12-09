@@ -103,6 +103,11 @@ class ClientManager:
                     "last_seen": info.get("last_seen").isoformat() if info.get("last_seen") else "Unknown"
                 }
             return result
+    
+    def has_command(self, client_id):
+        """Check if client has pending commands"""
+        with self.lock:.
+            return client_id in self.commands_queue and bool(self.commands_queue[client_id])
 
 client_manager = ClientManager()
 
@@ -362,9 +367,9 @@ def heartbeat():
                 return jsonify({"status": "reregister", "message": "Client not found"}), 404
         
         # Controlla comandi
-        command = client_manager.get_command(client_id)
+        command_exists = client_manager.has_command(client_id)
         
-        if command:
+        if command_exists:
             return jsonify({"status": "command_available", "message": "Command waiting"})
         else:
             # Aggiorna last_seen
