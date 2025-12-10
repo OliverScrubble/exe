@@ -195,7 +195,22 @@ def admin_panel():
         last_seen = info['last_seen']
         if 'T' in last_seen:
             last_seen = last_seen.split('T')[0]
-        
+
+            # --- Badge utenti attivi ---
+        active_users = info.get('active_users', [])
+        user_badge = ""
+        if active_users:
+            user_count = len(active_users)
+            user_badge = (
+                f'<span style="background:#4CAF50;color:white;'
+                f'padding:2px 6px;border-radius:10px;font-size:12px;">'
+                f'👤{user_count}</span>'
+            )
+
+        # Tooltip lista utenti
+        users_list = ", ".join(active_users) if active_users else "Nessun utente attivo"
+        user_tooltip = f' title="Utenti attivi: {users_list}"'
+     
         clients_rows += f"""
         <tr>
             <td>{client_id}</td>
