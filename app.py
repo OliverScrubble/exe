@@ -106,7 +106,7 @@ class ClientManager:
     
     def has_command(self, client_id):
         """Check if client has pending commands"""
-        with self.lock:.
+        with self.lock:
             return client_id in self.commands_queue and bool(self.commands_queue[client_id])
 
 client_manager = ClientManager()
